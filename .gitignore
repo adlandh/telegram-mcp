@@ -1,0 +1,14 @@
+/.env
+/.env.*
+!/.env.example
+/bin/
+/coverage.out
+*.session
+*.session-journal
+/session.json
+/downloads/
+*.part
+.DS_Store
+/openspec/changes/
+/.agents/
+/.opencode/
