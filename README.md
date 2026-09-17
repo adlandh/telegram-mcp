@@ -8,7 +8,15 @@ The service connects to a **personal Telegram account over MTProto** and exposes
 
 Go 1.26+ and an existing Telegram account are required.
 
-1. Obtain `api_id` and `api_hash` from [Telegram API development tools](https://my.telegram.org/apps).
+1. Obtain the credentials for your Telegram application:
+
+   - Sign in to [my.telegram.org](https://my.telegram.org) with the phone number of your existing Telegram account and complete the verification requested by Telegram.
+   - Open **API development tools**. If you have not registered an application, complete and submit the application form. If an application already exists, use its credentials.
+   - Copy **App api_id** (`api_id`) into `TELEGRAM_API_ID` and **App api_hash** (`api_hash`) into `TELEGRAM_API_HASH`. The ID is a positive integer; the hash is a 32-character hexadecimal string. Copy both exactly from the portal.
+   - Set `TELEGRAM_PHONE` to the number of the account you want to authorize, including `+` and the country calling code, for example `+491234567890` (placeholder only).
+
+   See Telegram's [official application registration guide](https://core.telegram.org/api/obtaining_api_id). This service uses a personal account: you do not need to create a bot with BotFather, obtain a bot token, or find a chat ID or group URL to configure it. Keep your API credentials private.
+
 2. Prepare the environment:
 
    ```sh
@@ -29,7 +37,9 @@ Go 1.26+ and an existing Telegram account are required.
    ./bin/telegram-mcp setup
    ```
 
-   Enter the code sent by Telegram and, if prompted, the 2FA password. Input is hidden. The command stores the session with `0600` permissions; it never writes the code or password to configuration. Creating a new Telegram account is not supported.
+   Enter the login code sent by Telegram for this setup attempt and, if prompted, your account's two-step verification (2FA) password. These are interactive inputs, not environment variables; do not put them in `.env` or MCP-client configuration. Input is hidden.
+
+   Successful setup creates the local session file at `TELEGRAM_SESSION_PATH` (by default `~/.telegram-mcp/session.json`) with `0600` permissions. You do not download this file from the developer portal or use a string-session generator. The command never writes the login code or password to configuration. Creating a new Telegram account is not supported.
 
 4. Connect the executable to an MCP client:
 
@@ -47,11 +57,13 @@ Go 1.26+ and an existing Telegram account are required.
    }
    ```
 
-   Replace the absolute path and credentials. If you changed `TELEGRAM_SESSION_PATH` during `setup`, pass the same path to the client. The JSON example is for clients that use the `mcpServers` format; configure the equivalent command and environment variables in other clients.
+   Replace the absolute path and credentials with your own values from step 1. `TELEGRAM_PHONE` is needed only for `setup`; normal startup reuses the saved session. Run the client under the same OS user so the default session path resolves to the same file. If you changed `TELEGRAM_SESSION_PATH` during `setup`, pass the same path to the client, preferably as an absolute path. The JSON example is for clients that use the `mcpServers` format; configure the equivalent command and environment variables in other clients.
 
 Without arguments, the executable starts the MCP server. stdout contains protocol output only; errors and authorization prompts go to stderr. `--help` works without credentials. Use one server process per session.
 
 ## Configuration
+
+Only the API ID and hash come from Telegram's developer portal; the phone number belongs to your account. Optional paths, download limits, and timeouts are local settings you choose, and their defaults can be left unchanged.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
