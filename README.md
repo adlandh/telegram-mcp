@@ -33,7 +33,7 @@ Go 1.26+ and an existing Telegram account are required.
 3. Build the binary and authorize once in a regular terminal:
 
    ```sh
-   go build -o bin/telegram-mcp ./cmd/telegram-mcp
+   go build -o bin/telegram-mcp .
    ./bin/telegram-mcp setup
    ```
 
@@ -107,7 +107,7 @@ Media is downloaded as a stream, with checks for both declared size and bytes ac
 ## Architecture
 
 ```text
-cmd/telegram-mcp         — dependency wiring, lifecycle, CLI setup
+main.go                 — Uber Fx dependency wiring, lifecycle, CLI setup
 internal/config          — environment loading and validation
 internal/domain          — messages, chats, folders, media; standard library only
 internal/port            — outbound Telegram interface
@@ -129,7 +129,7 @@ task lint
 Without Task:
 
 ```sh
-go build -o bin/telegram-mcp ./cmd/telegram-mcp
+go build -o bin/telegram-mcp .
 go test -race ./...
 golangci-lint run ./...
 ```

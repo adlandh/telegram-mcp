@@ -7,10 +7,10 @@
 
 Run from the repository root with Go 1.26+ and golangci-lint v2:
 
-- `task build` — builds `bin/telegram-mcp` from `./cmd/telegram-mcp`, not the root package.
+- `task build` — builds `bin/telegram-mcp` from the root package `.`.
 - `task test` — runs `go test -race ./...`; tests need no Telegram credentials or network.
 - `task lint` — runs `golangci-lint run ./...` with `.golangci.yml`.
-- `task fmt` — runs `gofmt -w cmd internal`.
+- `task fmt` — runs `gofmt -w *.go internal`.
 - Single package: `go test -race -count=1 ./internal/app`.
 - Single test: `go test -race -count=1 ./internal/adapter/telegram -run '^TestHistoryPaginationDoesNotLoseBacklog$'`.
 - MCP schemas, handshake and tool calls: `go test -race ./internal/adapter/mcp -run '^TestMCPContract$'`.
@@ -23,7 +23,7 @@ Run from the repository root with Go 1.26+ and golangci-lint v2:
 - Outbound port: `internal/port.Telegram` defines the operations the application needs; `internal/adapter/telegram` implements them with gotd/td and local file downloads.
 - Inbound adapter: `internal/adapter/mcp` owns MCP schemas, stdio transport and the consumer-defined `Executor` interface implemented by `app.Service`.
 - Keep `internal/domain`, `internal/port` and `internal/app` free of SDK and transport dependencies; the core must not read environment variables.
-- `cmd/telegram-mcp` is the composition root: load settings from `internal/config`, construct adapters and service, and manage authorization and lifecycle. Inject dependencies through constructors.
+- Root `main.go` is the composition root: load settings from `internal/config`, construct adapters and service, and manage authorization and lifecycle. Use Uber Fx for dependency wiring at this root; keep internal constructors independent of Fx.
 
 ## Boundaries and behavior
 

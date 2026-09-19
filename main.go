@@ -14,11 +14,13 @@ import (
 	tgadapter "github.com/adlandh/telegram-mcp/internal/adapter/telegram"
 	"github.com/adlandh/telegram-mcp/internal/app"
 	"github.com/adlandh/telegram-mcp/internal/config"
+	"github.com/adlandh/telegram-mcp/internal/port"
 	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/auth"
 	"github.com/gotd/td/tg"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"go.uber.org/fx"
 	"golang.org/x/term"
 )
 
@@ -47,8 +49,14 @@ func run(ctx context.Context, args []string) error {
 			return fmt.Errorf("unexpected arguments")
 		}
 	}
-	cfg, err := config.Load()
-	if err != nil {
+	var cfg config.Config
+	var client *telegram.Client
+	var server *mcp.Server
+	opts := fx.Options(providers(), fx.Populate(&cfg, &client))
+	if !setup {
+		opts = fx.Options(opts, fx.Populate(&server))
+	}
+	if err := fx.New(opts).Err(); err != nil {
 		return err
 	}
 	if setup && cfg.Phone == "" {
@@ -66,7 +74,6 @@ func run(ctx context.Context, args []string) error {
 			return err
 		}
 	}
-	client := telegram.NewClient(cfg.APIID, cfg.APIHash, telegram.Options{SessionStorage: &session.FileStorage{Path: cfg.SessionPath}, NoUpdates: true})
 	return client.Run(ctx, func(ctx context.Context) error {
 		if setup {
 			flow := auth.NewFlow(terminalAuth{UserAuthenticator: auth.CodeOnly(cfg.Phone, auth.CodeAuthenticatorFunc(func(ctx context.Context, _ *tg.AuthSentCode) (string, error) {
@@ -87,9 +94,26 @@ func run(ctx context.Context, args []string) error {
 		if !status.Authorized {
 			return fmt.Errorf("session is not authorized; run telegram-mcp setup")
 		}
-		service := app.New(tgadapter.New(client, cfg.DownloadDir), cfg.MaxDownloadMB, cfg.RequestTimeout)
-		return mcpadapter.New(service).Run(ctx, &mcp.StdioTransport{})
+		return server.Run(ctx, &mcp.StdioTransport{})
 	})
+}
+
+func providers() fx.Option {
+	return fx.Options(fx.NopLogger, fx.Provide(
+		config.Load,
+		func(cfg config.Config) *telegram.Client {
+			return telegram.NewClient(cfg.APIID, cfg.APIHash, telegram.Options{
+				SessionStorage: &session.FileStorage{Path: cfg.SessionPath}, NoUpdates: true,
+			})
+		},
+		func(client *telegram.Client, cfg config.Config) port.Telegram {
+			return tgadapter.New(client, cfg.DownloadDir)
+		},
+		func(client port.Telegram, cfg config.Config) mcpadapter.Executor {
+			return app.New(client, cfg.MaxDownloadMB, cfg.RequestTimeout)
+		},
+		mcpadapter.New,
+	))
 }
 
 type terminalAuth struct{ auth.UserAuthenticator }

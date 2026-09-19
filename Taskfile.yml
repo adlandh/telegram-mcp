@@ -4,7 +4,7 @@ tasks:
   build:
     desc: Build the MCP server
     cmds:
-      - go build -o bin/telegram-mcp ./cmd/telegram-mcp
+      - go build -o bin/telegram-mcp .
   test:
     desc: Run offline tests and the race detector
     cmds:
@@ -15,4 +15,4 @@ tasks:
       - golangci-lint run ./...
   fmt:
     cmds:
-      - gofmt -w cmd internal
+      - gofmt -w *.go internal

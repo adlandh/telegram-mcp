@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/gotd/td v0.161.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
+	go.uber.org/fx v1.24.0
 	golang.org/x/term v0.46.0
 )
 
@@ -39,6 +40,7 @@ require (
 	go.opentelemetry.io/otel/metric v1.44.0 // indirect
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
+	go.uber.org/dig v1.19.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.28.0 // indirect
 	golang.org/x/crypto v0.54.0 // indirect
