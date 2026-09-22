@@ -25,7 +25,8 @@ func TestRunStartup(t *testing.T) {
 		{"short help", []string{"-h"}, true, ""},
 		{"help command", []string{"help"}, true, ""},
 		{"unknown", []string{"unknown"}, true, "unknown command"},
-		{"extra", []string{"setup", "extra"}, true, "unexpected arguments"},
+		{"extra", []string{"setup", "extra"}, true, "use setup or setup qr"},
+		{"qr extra", []string{"setup", "qr", "extra"}, true, "unexpected arguments"},
 		{"configuration", nil, true, "TELEGRAM_API_ID"},
 		{"phone", []string{"setup"}, false, "TELEGRAM_PHONE is required"},
 		{"session", nil, false, "session unavailable"},
@@ -126,7 +127,7 @@ func TestPrompt(t *testing.T) {
 	if _, err := prompt(t.Context(), "Code: ", true); err == nil || !strings.Contains(err.Error(), "interactive terminal") {
 		t.Fatalf("got %v, want terminal error", err)
 	}
-	if _, err := (terminalAuth{}).Password(ctx); !errors.Is(err, context.Canceled) {
+	if _, err := prompt(ctx, "Telegram 2FA password: ", false); !errors.Is(err, context.Canceled) {
 		t.Fatalf("password prompt: got %v, want cancellation", err)
 	}
 }

@@ -39,6 +39,12 @@ Go 1.26+ and an existing Telegram account are required.
 
    Enter the login code sent by Telegram for this setup attempt and, if prompted, your account's two-step verification (2FA) password. These are interactive inputs, not environment variables; do not put them in `.env` or MCP-client configuration. Input is hidden.
 
+   Setup displays the delivery method reported by Telegram before asking for the code. For an in-app notification, check the Telegram service chat in other sessions logged into the same account; for SMS or a voice call, check your phone. A successful request does not confirm that the code arrived. SMS word/phrase codes must be entered in full.
+
+   If no code arrives, enter `resend` at the code prompt. This requests Telegram's next delivery method only if Telegram offers one and its displayed timeout has elapsed. An early request shows the remaining wait; it does not queue an automatic resend. If no fallback is available, enter the original code or press Ctrl+C to exit. Telegram controls delivery and can restrict SMS for third-party apps; restarting setup repeatedly does not force SMS. After repeated requests Telegram may report a code as delivered yet silently drop it — waiting helps, restarting does not. Rate limits display the retry delay and stop the attempt. Unsupported delivery flows (including email verification, Firebase and Fragment) stop with guidance to check your account in an official Telegram client. See [Telegram's authorization documentation](https://core.telegram.org/api/auth#sending-a-verification-code).
+
+   If codes never arrive, authorize without a code instead: `./bin/telegram-mcp setup qr` shows a QR login token (refreshed on expiry); confirm it in the Telegram app on the logged-in phone via Settings → Devices → Scan QR Code. If the account has two-step verification, enter the 2FA password when prompted after confirming the scan — without it Telegram leaves the login incomplete. QR login needs no phone number or code and is unaffected by code-delivery restrictions.
+
    Successful setup creates the local session file at `TELEGRAM_SESSION_PATH` (by default `~/.telegram-mcp/session.json`) with `0600` permissions. You do not download this file from the developer portal or use a string-session generator. The command never writes the login code or password to configuration. Creating a new Telegram account is not supported.
 
 4. Connect the executable to an MCP client:
@@ -69,7 +75,7 @@ Only the API ID and hash come from Telegram's developer portal; the phone number
 | --- | --- | --- |
 | `TELEGRAM_API_ID` | Required | Positive 32-bit Telegram API ID |
 | `TELEGRAM_API_HASH` | Required | 32 hexadecimal characters |
-| `TELEGRAM_PHONE` | Required for `setup` | Phone number with country calling code |
+| `TELEGRAM_PHONE` | Required for `setup` (unused by `setup qr`) | Phone number with country calling code |
 | `TELEGRAM_SESSION_PATH` | `~/.telegram-mcp/session.json` | gotd authorized-session file |
 | `TELEGRAM_DOWNLOAD_DIR` | `~/.telegram-mcp/downloads` | Directory for downloaded files |
 | `TELEGRAM_MAX_DOWNLOAD_MB` | `200` | Download limit in MiB; `0` disables the limit |

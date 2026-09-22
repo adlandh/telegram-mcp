@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/gotd/td v0.161.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
+	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	go.uber.org/fx v1.24.0
 	golang.org/x/term v0.46.0
 )

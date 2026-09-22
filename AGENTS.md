@@ -38,7 +38,7 @@ Run from the repository root with Go 1.26+ and golangci-lint v2:
 ## Runtime gotchas
 
 - Configuration comes exclusively from environment variables; `.env` is not loaded automatically. See `.env.example` and README setup instructions.
-- Authorize with `./bin/telegram-mcp setup` in an interactive terminal; login codes and 2FA passwords are prompts, not configuration variables.
+- Authorize with `./bin/telegram-mcp setup` (login code, may be resend-able) or `./bin/telegram-mcp setup qr` (code-free QR login) in an interactive terminal; codes, QR tokens and 2FA passwords are prompts, not configuration variables.
 - Normal startup requires API ID/hash and a saved gotd session; `TELEGRAM_PHONE` is setup-only. GramJS string sessions are incompatible.
 - Use the same OS user/session path for setup and the MCP client, with one server process per session. Relative paths resolve from the process working directory.
 - stdout belongs to MCP. Diagnostics and setup prompts go to stderr.

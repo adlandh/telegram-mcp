@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	mcpadapter "github.com/adlandh/telegram-mcp/internal/adapter/mcp"
 	tgadapter "github.com/adlandh/telegram-mcp/internal/adapter/telegram"
@@ -17,7 +18,7 @@ import (
 	"github.com/adlandh/telegram-mcp/internal/port"
 	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
-	"github.com/gotd/td/telegram/auth"
+	"github.com/gotd/td/telegram/auth/qrlogin"
 	"github.com/gotd/td/tg"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.uber.org/fx"
@@ -34,32 +35,39 @@ func main() {
 }
 
 func run(ctx context.Context, args []string) error {
-	setup := false
+	setup, qrLogin := false, false
 	if len(args) > 0 {
 		switch args[0] {
 		case "-h", "--help", "help":
-			fmt.Fprintln(os.Stderr, "Usage: telegram-mcp [setup]\nSettings: TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE (setup only).\nSee .env.example for optional paths, download limit and timeout.")
+			fmt.Fprintln(os.Stderr, "Usage: telegram-mcp [setup [qr]]\nSettings: TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE (setup only).\nSee .env.example for optional paths, download limit and timeout.")
 			return nil
 		case "setup":
 			setup = true
+			if len(args) > 1 {
+				if args[1] != "qr" {
+					return fmt.Errorf("unknown argument %q; use setup or setup qr", args[1])
+				}
+				qrLogin = true
+			}
 		default:
 			return fmt.Errorf("unknown command %q; use --help", args[0])
 		}
-		if len(args) > 1 {
+		if len(args) > 2 || (len(args) > 1 && !setup) {
 			return fmt.Errorf("unexpected arguments")
 		}
 	}
 	var cfg config.Config
 	var client *telegram.Client
+	var dispatcher tg.UpdateDispatcher
 	var server *mcp.Server
-	opts := fx.Options(providers(), fx.Populate(&cfg, &client))
+	opts := fx.Options(providers(), fx.Populate(&cfg, &client, &dispatcher))
 	if !setup {
 		opts = fx.Options(opts, fx.Populate(&server))
 	}
 	if err := fx.New(opts).Err(); err != nil {
 		return err
 	}
-	if setup && cfg.Phone == "" {
+	if setup && !qrLogin && cfg.Phone == "" {
 		return fmt.Errorf("TELEGRAM_PHONE is required for setup")
 	}
 	if setup {
@@ -76,10 +84,11 @@ func run(ctx context.Context, args []string) error {
 	}
 	return client.Run(ctx, func(ctx context.Context) error {
 		if setup {
-			flow := auth.NewFlow(terminalAuth{UserAuthenticator: auth.CodeOnly(cfg.Phone, auth.CodeAuthenticatorFunc(func(ctx context.Context, _ *tg.AuthSentCode) (string, error) {
-				return prompt(ctx, "Telegram login code: ", true)
-			}))}, auth.SendCodeOptions{})
-			if err := client.Auth().IfNecessary(ctx, flow); err != nil {
+			if qrLogin {
+				if err := setupQR(ctx, client.QR(), client.Auth(), qrlogin.OnLoginToken(dispatcher), os.Stderr, prompt); err != nil {
+					return fmt.Errorf("qr login: %w", err)
+				}
+			} else if err := setupLogin(ctx, client.Auth(), cfg.Phone, prompt, os.Stderr, time.Now); err != nil {
 				return fmt.Errorf("login: %w", err)
 			}
 			fmt.Fprintln(os.Stderr, "Session saved. Start telegram-mcp without arguments to serve MCP.")
@@ -101,9 +110,10 @@ func run(ctx context.Context, args []string) error {
 func providers() fx.Option {
 	return fx.Options(fx.NopLogger, fx.Provide(
 		config.Load,
-		func(cfg config.Config) *telegram.Client {
+		tg.NewUpdateDispatcher,
+		func(cfg config.Config, dispatcher tg.UpdateDispatcher) *telegram.Client {
 			return telegram.NewClient(cfg.APIID, cfg.APIHash, telegram.Options{
-				SessionStorage: &session.FileStorage{Path: cfg.SessionPath}, NoUpdates: true,
+				SessionStorage: &session.FileStorage{Path: cfg.SessionPath}, UpdateHandler: dispatcher,
 			})
 		},
 		func(client *telegram.Client, cfg config.Config) port.Telegram {
@@ -116,18 +126,14 @@ func providers() fx.Option {
 	))
 }
 
-type terminalAuth struct{ auth.UserAuthenticator }
-
-func (terminalAuth) Password(ctx context.Context) (string, error) {
-	return prompt(ctx, "Telegram 2FA password: ", false)
-}
+var errInteractiveTerminal = errors.New("setup requires an interactive terminal")
 
 func prompt(ctx context.Context, label string, trim bool) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return "", fmt.Errorf("setup requires an interactive terminal")
+		return "", errInteractiveTerminal
 	}
 	fmt.Fprint(os.Stderr, label)
 	b, err := term.ReadPassword(int(os.Stdin.Fd()))
