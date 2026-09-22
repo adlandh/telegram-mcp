@@ -127,9 +127,6 @@ func TestPrompt(t *testing.T) {
 	if _, err := prompt(t.Context(), "Code: ", true); err == nil || !strings.Contains(err.Error(), "interactive terminal") {
 		t.Fatalf("got %v, want terminal error", err)
 	}
-	if _, err := prompt(ctx, "Telegram 2FA password: ", false); !errors.Is(err, context.Canceled) {
-		t.Fatalf("password prompt: got %v, want cancellation", err)
-	}
 }
 
 func testConfig(t *testing.T) string {

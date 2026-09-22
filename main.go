@@ -52,7 +52,7 @@ func run(ctx context.Context, args []string) error {
 		default:
 			return fmt.Errorf("unknown command %q; use --help", args[0])
 		}
-		if len(args) > 2 || (len(args) > 1 && !setup) {
+		if len(args) > 2 {
 			return fmt.Errorf("unexpected arguments")
 		}
 	}

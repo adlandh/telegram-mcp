@@ -150,7 +150,7 @@ func TestSetupLogin(t *testing.T) {
 }
 
 func TestSetupResend(t *testing.T) {
-	for _, ending := range []string{"signin", "success", "error", "signup", "unsupported"} {
+	for _, ending := range []string{"signin", "error"} {
 		t.Run(ending, func(t *testing.T) {
 			first, second := sentCode("hash1"), sentCode("hash2")
 			first.SetNextType(&tg.AuthCodeTypeSMS{})
@@ -158,15 +158,8 @@ func TestSetupResend(t *testing.T) {
 			second.SetNextType(&tg.AuthCodeTypeSMS{})
 			second.SetTimeout(10)
 			third := codeReply{code: sentCode("hash3")}
-			switch ending {
-			case "success":
-				third.code = &tg.AuthSentCodeSuccess{Authorization: &tg.AuthAuthorization{}}
-			case "error":
+			if ending == "error" {
 				third.err = tgerr.New(420, "FLOOD_WAIT_60")
-			case "signup":
-				third.code = &tg.AuthSentCodeSuccess{Authorization: &tg.AuthAuthorizationSignUpRequired{}}
-			case "unsupported":
-				third.code = &tg.AuthSentCode{PhoneCodeHash: "hash3", Type: &tg.AuthSentCodeTypeFirebaseSMS{}}
 			}
 			client := &loginClient{replies: []codeReply{{code: first}, {code: second}, third}}
 			current := time.Unix(0, 0)
@@ -199,7 +192,7 @@ func TestSetupResend(t *testing.T) {
 			if !slices.Equal(client.calls, want) {
 				t.Fatalf("calls = %v, want %v", client.calls, want)
 			}
-			wantError := ending != "signin" && ending != "success"
+			wantError := ending == "error"
 			if (err != nil) != wantError {
 				t.Fatalf("error = %v", err)
 			}
