@@ -74,7 +74,7 @@ Before requesting a code, setup SHALL describe Telegram's reported delivery meth
 
 At a supported code prompt, setup SHALL accept `resend` as an explicit recovery action. It SHALL request another code only when Telegram supplies a next delivery method and the server-provided timeout has elapsed. An early request SHALL report the remaining wait without issuing a resend RPC; an absent timeout SHALL impose no additional local delay. Without a next method, setup SHALL explain that retry is unavailable and SHALL NOT request another code. Each successful resend SHALL replace the active delivery metadata and code hash; subsequent login SHALL use the newest hash. Setup SHALL NOT force SMS delivery or automatically loop on errors. Telegram rate limits and unsupported responses SHALL terminate the attempt with an actionable error and no false success message.
 
-Setup SHALL also provide a code-free `setup qr` alternative that renders a QR login token on stderr for confirmation in the phone app's device-scan flow. QR login SHALL require no phone number and SHALL persist the same reusable session with identical permissions and success behavior. An expired token SHALL refresh with a new rendering while setup keeps waiting. QR export or import failures, including rate limits, SHALL terminate the attempt with an actionable error and no session-saved message. All diagnostics SHALL stay on stderr and stdout SHALL remain empty.
+Setup SHALL also provide a code-free `setup qr` alternative that renders a QR login token on stderr for confirmation in the phone app's device-scan flow. QR login SHALL require no phone number and SHALL persist the same reusable session with identical permissions and success behavior. An expired token SHALL refresh with a new rendering while setup keeps waiting. A confirmed scan on a 2FA-protected account SHALL request the 2FA password with hidden terminal input and complete authorization the same way as the code flow. QR export or import failures, including rate limits, SHALL terminate the attempt with an actionable error and no session-saved message. All diagnostics SHALL stay on stderr and stdout SHALL remain empty.
 
 #### Scenario: First login creates a private session
 
@@ -141,6 +141,12 @@ Setup SHALL also provide a code-free `setup qr` alternative that renders a QR lo
 
 - **WHEN** QR export or import fails, including rate limits
 - **THEN** setup reports an actionable error without a session-saved message
+
+#### Scenario: QR scan on a 2FA-protected account requests the password
+
+- **WHEN** the QR scan is confirmed but Telegram requires the 2FA password
+- **THEN** setup prompts for the password with hidden input
+- **AND** a correct password completes authorization with the same reusable session
 
 #### Scenario: Authorization succeeds without another code
 
