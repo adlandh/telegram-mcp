@@ -19,6 +19,7 @@ type Arguments struct {
 	Limit     *int   `json:"limit,omitempty"`
 	SinceID   *int   `json:"sinceId,omitempty"`
 	MessageID int    `json:"messageId,omitempty"`
+	FolderID  int    `json:"folderId,omitzero"`
 	Archived  bool   `json:"archived,omitempty"`
 	MaxMB     *int64 `json:"maxMB,omitempty"`
 }
@@ -38,7 +39,7 @@ func (s *Service) Execute(ctx context.Context, name string, a Arguments) (string
 	defer cancel()
 	a.GroupURL, a.Query = strings.TrimSpace(a.GroupURL), strings.TrimSpace(a.Query)
 	switch name {
-	case "global_search", "list_dialogs", "list_folders":
+	case "global_search", "list_dialogs", "list_folders", "list_folder_dialogs":
 	case "read_messages", "search_messages", "get_group_info", "fetch_since", "get_message", "get_pinned", "get_media_info", "download_media", "get_thumbnail":
 		if a.GroupURL == "" {
 			return "", fmt.Errorf("groupUrl is required")
@@ -54,6 +55,9 @@ func (s *Service) Execute(ctx context.Context, name string, a Arguments) (string
 	}
 	if name == "fetch_since" && (a.SinceID == nil || *a.SinceID < 0 || *a.SinceID >= 1<<31-1) {
 		return "", fmt.Errorf("sinceId must be between 0 and 2147483646")
+	}
+	if name == "list_folder_dialogs" && (a.FolderID < 2 || a.FolderID > 1<<31-1) {
+		return "", fmt.Errorf("folderId must be between 2 and 2147483647")
 	}
 	switch name {
 	case "get_message", "get_media_info", "download_media", "get_thumbnail":
@@ -133,11 +137,16 @@ func (s *Service) Execute(ctx context.Context, name string, a Arguments) (string
 		if err != nil {
 			return "", err
 		}
-		lines := []string{fmt.Sprintf("%d dialogs:", len(chats))}
-		for _, c := range chats {
-			lines = append(lines, fmt.Sprintf("%s: %s %s (%d unread) [id:%s]", c.Type, c.Title, c.Username, c.Unread, c.ID))
+		return formatDialogs(chats), nil
+	case "list_folder_dialogs":
+		chats, err := s.telegram.FolderDialogs(ctx, a.FolderID, limit(100, 500))
+		if err != nil {
+			return "", err
 		}
-		return strings.Join(lines, "\n"), nil
+		if len(chats) == 0 {
+			return "(no dialogs in folder)", nil
+		}
+		return formatDialogs(chats), nil
 	case "list_folders":
 		folders, err := s.telegram.Folders(ctx)
 		if err != nil {
@@ -145,7 +154,7 @@ func (s *Service) Execute(ctx context.Context, name string, a Arguments) (string
 		}
 		var lines []string
 		for _, f := range folders {
-			lines = append(lines, fmt.Sprintf("%s — %d chats", f.Title, f.Count))
+			lines = append(lines, fmt.Sprintf("%s — %d explicitly included chats [folderId:%d]", f.Title, f.Count, f.ID))
 		}
 		return cmp.Or(strings.Join(lines, "\n"), "(no folders defined)"), nil
 	case "download_media", "get_thumbnail":
@@ -170,6 +179,14 @@ func optional(n *int) string {
 		return "N/A"
 	}
 	return fmt.Sprint(*n)
+}
+
+func formatDialogs(chats []domain.Chat) string {
+	lines := []string{fmt.Sprintf("%d dialogs:", len(chats))}
+	for _, c := range chats {
+		lines = append(lines, fmt.Sprintf("%s: %s %s (%d unread) [id:%s]", c.Type, c.Title, c.Username, c.Unread, c.ID))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func formatMessage(m domain.Message) string {

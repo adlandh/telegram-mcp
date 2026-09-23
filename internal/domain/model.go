@@ -32,6 +32,7 @@ type Chat struct {
 }
 
 type Folder struct {
+	ID    int
 	Title string
 	Count int
 }

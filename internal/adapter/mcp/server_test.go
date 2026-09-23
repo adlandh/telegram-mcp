@@ -19,7 +19,7 @@ func TestMCPContract(t *testing.T) {
 	calls := 0
 	server := New(executorFunc(func(_ context.Context, name string, a app.Arguments) (string, error) {
 		calls++
-		if a.GroupURL == "fail" {
+		if a.GroupURL == "fail" || (name == "list_folder_dialogs" && a.FolderID == 7) {
 			return "", fmt.Errorf("Telegram unavailable")
 		}
 		return name, nil
@@ -40,7 +40,7 @@ func TestMCPContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 12 {
+	if len(tools.Tools) != 13 {
 		t.Fatalf("got %d tools", len(tools.Tools))
 	}
 	for _, tool := range tools.Tools {
@@ -49,6 +49,9 @@ func TestMCPContract(t *testing.T) {
 		case "list_folders":
 		case "list_dialogs":
 			args["archived"] = true
+		case "list_folder_dialogs":
+			args["folderId"] = 2
+			args["limit"] = 50
 		case "global_search":
 			args["query"] = "hello"
 		default:
@@ -71,6 +74,16 @@ func TestMCPContract(t *testing.T) {
 			t.Errorf("incorrect annotation: %s", tool.Name)
 		}
 	}
+	for _, args := range []map[string]any{{}, {"folderId": "2"}, {"folderId": 2.5}, {"folderId": 1}, {"folderId": 2147483648}, {"folderId": 2, "limit": 0}, {"folderId": 2, "unexpected": true}} {
+		before := calls
+		r, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: "list_folder_dialogs", Arguments: args})
+		if err == nil && !r.IsError {
+			t.Errorf("invalid folder request accepted: %+v", args)
+		}
+		if calls != before {
+			t.Errorf("invalid folder request reached application: %+v", args)
+		}
+	}
 	for _, args := range []map[string]any{{}, {"groupUrl": "x", "limit": 1.5}, {"groupUrl": "x", "limit": -1}, {"groupUrl": "x", "unexpected": true}, {"groupUrl": 123}} {
 		before := calls
 		r, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: "read_messages", Arguments: args})
@@ -84,5 +97,9 @@ func TestMCPContract(t *testing.T) {
 	r, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: "read_messages", Arguments: map[string]any{"groupUrl": "fail"}})
 	if err != nil || !r.IsError {
 		t.Fatalf("expected MCP tool error: %+v, %v", r, err)
+	}
+	r, err = cs.CallTool(t.Context(), &mcp.CallToolParams{Name: "list_folder_dialogs", Arguments: map[string]any{"folderId": 7}})
+	if err != nil || !r.IsError {
+		t.Fatalf("expected folder MCP tool error: %+v, %v", r, err)
 	}
 }

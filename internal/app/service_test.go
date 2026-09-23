@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -12,10 +13,22 @@ import (
 
 type fakeTelegram struct {
 	port.Telegram
-	query    domain.MessageQuery
-	maxBytes int64
-	preview  bool
-	deadline bool
+	query       domain.MessageQuery
+	maxBytes    int64
+	preview     bool
+	deadline    bool
+	folders     []domain.Folder
+	folderID    int
+	limit       int
+	folderChats []domain.Chat
+	folderErr   error
+}
+
+func (f *fakeTelegram) Folders(context.Context) ([]domain.Folder, error) { return f.folders, nil }
+
+func (f *fakeTelegram) FolderDialogs(_ context.Context, id, limit int) ([]domain.Chat, error) {
+	f.folderID, f.limit = id, limit
+	return f.folderChats, f.folderErr
 }
 
 func (f *fakeTelegram) Messages(ctx context.Context, q domain.MessageQuery) ([]domain.Message, error) {
@@ -68,6 +81,9 @@ func TestRejectInvalidArgumentsBeforeCallingTelegram(t *testing.T) {
 		{"search_messages", Arguments{GroupURL: "x", Query: "  "}},
 		{"fetch_since", Arguments{GroupURL: "x"}},
 		{"fetch_since", Arguments{GroupURL: "x", SinceID: new(-1)}},
+		{"list_folder_dialogs", Arguments{}},
+		{"list_folder_dialogs", Arguments{FolderID: 1}},
+		{"list_folder_dialogs", Arguments{FolderID: 1 << 31}},
 		{"get_message", Arguments{GroupURL: "x", MessageID: 1 << 31}},
 		{"download_media", Arguments{GroupURL: "x", MessageID: 1, MaxMB: new(int64(-1))}},
 		{"download_media", Arguments{GroupURL: "x", MessageID: 1, MaxMB: new(int64(1<<63 - 1))}},
@@ -93,5 +109,42 @@ func TestDownloadLimits(t *testing.T) {
 	}
 	if _, err := s.Execute(t.Context(), "get_thumbnail", Arguments{GroupURL: "x", MessageID: 1}); err != nil || !f.preview {
 		t.Fatalf("preview: %v", err)
+	}
+}
+
+func TestFolderDiscoveryText(t *testing.T) {
+	f := &fakeTelegram{folders: []domain.Folder{{ID: 2, Title: "Work", Count: 1}, {ID: 3, Title: "Work", Count: 0}}}
+	s := New(f, 200, time.Minute)
+	got, err := s.Execute(t.Context(), "list_folders", Arguments{})
+	if err != nil || !strings.Contains(got, "Work — 1 explicitly included chats [folderId:2]") || !strings.Contains(got, "Work — 0 explicitly included chats [folderId:3]") {
+		t.Fatalf("folders: %q, %v", got, err)
+	}
+	f.folders = nil
+	got, err = s.Execute(t.Context(), "list_folders", Arguments{})
+	if err != nil || got != "(no folders defined)" {
+		t.Fatalf("empty folders: %q, %v", got, err)
+	}
+}
+
+func TestFolderDialogsDispatch(t *testing.T) {
+	f := &fakeTelegram{folderChats: []domain.Chat{{ID: "-1000000000002", Type: "Channel", Title: "News", Username: "@news", Unread: 3}}}
+	s := New(f, 200, time.Minute)
+	got, err := s.Execute(t.Context(), "list_folder_dialogs", Arguments{FolderID: 2})
+	if err != nil || f.folderID != 2 || f.limit != 100 || !strings.Contains(got, "Channel: News @news (3 unread) [id:-1000000000002]") {
+		t.Fatalf("folder dispatch: %q, id=%d, limit=%d, err=%v", got, f.folderID, f.limit, err)
+	}
+	_, err = s.Execute(t.Context(), "list_folder_dialogs", Arguments{FolderID: 2, Limit: new(1000)})
+	if err != nil || f.limit != 500 {
+		t.Fatalf("folder cap: %d, %v", f.limit, err)
+	}
+	f.folderChats = nil
+	got, err = s.Execute(t.Context(), "list_folder_dialogs", Arguments{FolderID: 2})
+	if err != nil || got != "(no dialogs in folder)" {
+		t.Fatalf("empty folder: %q, %v", got, err)
+	}
+	f.folderErr = errors.New("unavailable")
+	got, err = s.Execute(t.Context(), "list_folder_dialogs", Arguments{FolderID: 2})
+	if err == nil || got != "" {
+		t.Fatalf("folder error: %q, %v", got, err)
 	}
 }

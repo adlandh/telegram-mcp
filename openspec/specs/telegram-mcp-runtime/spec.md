@@ -20,6 +20,7 @@ The server SHALL expose exactly the following tools and parameter names. Success
 | get_group_info | groupUrl | none |
 | list_dialogs | none | limit, archived |
 | list_folders | none | none |
+| list_folder_dialogs | folderId | limit |
 | get_pinned | groupUrl | limit |
 | get_media_info | groupUrl, messageId | none |
 | download_media | groupUrl, messageId | maxMB |
@@ -28,7 +29,7 @@ The server SHALL expose exactly the following tools and parameter names. Success
 #### Scenario: Discover tools
 
 - **WHEN** an MCP client initializes and requests the tool list
-- **THEN** it receives the 12 tools and their input schemas
+- **THEN** it receives the 13 tools and their input schemas
 - **AND** only `download_media` and `get_thumbnail` advertise `readOnlyHint=false`, while all tools advertise `destructiveHint=false`
 
 #### Scenario: Telegram request fails
@@ -38,7 +39,7 @@ The server SHALL expose exactly the following tools and parameter names. Success
 
 ### Requirement: Validate tool arguments
 
-The server SHALL reject unknown properties, missing required parameters, incorrect types, non-integer numeric inputs, non-positive limits, and blank required chat identifiers or search queries. `messageId` SHALL be in `[1, 2147483647]`, `sinceId` in `[0, 2147483646]`, and `maxMB` SHALL be non-negative and representable as signed 64-bit bytes after multiplication by 1048576.
+The server SHALL reject unknown properties, missing required parameters, incorrect types, non-integer numeric inputs, non-positive limits, and blank required chat identifiers or search queries. `messageId` SHALL be in `[1, 2147483647]`, `sinceId` in `[0, 2147483646]`, and `maxMB` SHALL be non-negative and representable as signed 64-bit bytes after multiplication by 1048576. `list_folder_dialogs` SHALL require integer `folderId` in `[2, 2147483647]`; IDs 0 and 1 SHALL remain main/archive selectors for the existing `list_dialogs` behavior, not custom folder IDs.
 
 #### Scenario: Invalid arguments do not reach Telegram
 
@@ -49,6 +50,16 @@ The server SHALL reject unknown properties, missing required parameters, incorre
 
 - **WHEN** a caller provides `maxMB=8796093022208`
 - **THEN** the server rejects the value before attempting a download
+
+#### Scenario: Invalid folder selection is rejected
+
+- **WHEN** `folderId` is missing, a string, fractional, less than 2, or greater than 2147483647
+- **THEN** the request fails validation before calling Telegram
+
+#### Scenario: Valid folder selection reaches the application
+
+- **WHEN** a caller supplies `folderId=2` and `limit=50` to `list_folder_dialogs`
+- **THEN** the tool passes those integer values to the application and returns text or an MCP tool error
 
 ### Requirement: Environment-only configuration
 

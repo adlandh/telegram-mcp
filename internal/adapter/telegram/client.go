@@ -163,9 +163,9 @@ func (c *Client) Folders(ctx context.Context) ([]domain.Folder, error) {
 	for _, f := range r.Filters {
 		switch f := f.(type) {
 		case *tg.DialogFilter:
-			result = append(result, domain.Folder{Title: f.Title.Text, Count: len(f.IncludePeers)})
+			result = append(result, domain.Folder{ID: f.ID, Title: f.Title.Text, Count: len(f.IncludePeers)})
 		case *tg.DialogFilterChatlist:
-			result = append(result, domain.Folder{Title: f.Title.Text, Count: len(f.IncludePeers)})
+			result = append(result, domain.Folder{ID: f.ID, Title: f.Title.Text, Count: len(f.IncludePeers)})
 		}
 	}
 	return result, nil

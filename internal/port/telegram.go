@@ -13,5 +13,6 @@ type Telegram interface {
 	Chat(context.Context, string) (domain.Chat, error)
 	Dialogs(context.Context, int, bool) ([]domain.Chat, error)
 	Folders(context.Context) ([]domain.Folder, error)
+	FolderDialogs(context.Context, int, int) ([]domain.Chat, error)
 	Download(context.Context, string, int, bool, int64) (domain.Download, error)
 }

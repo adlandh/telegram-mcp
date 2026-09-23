@@ -37,6 +37,30 @@ func TestNormalize(t *testing.T) {
 	}
 }
 
+func TestFoldersExposeIDs(t *testing.T) {
+	filters := []tg.DialogFilterClass{
+		&tg.DialogFilterDefault{},
+		&tg.DialogFilter{ID: 2, Title: tg.TextWithEntities{Text: "Work"}, IncludePeers: []tg.InputPeerClass{&tg.InputPeerChat{ChatID: 1}}},
+		&tg.DialogFilterChatlist{ID: 3, Title: tg.TextWithEntities{Text: "Work"}, IncludePeers: []tg.InputPeerClass{&tg.InputPeerChannel{ChannelID: 2}}},
+	}
+	c := &Client{api: tg.NewClient(invokeFunc(func(_ context.Context, in bin.Encoder, out bin.Decoder) error {
+		if _, ok := in.(*tg.MessagesGetDialogFiltersRequest); !ok {
+			t.Fatalf("unexpected request %T", in)
+		}
+		out.(*tg.MessagesDialogFilters).Filters = filters
+		return nil
+	}))}
+	got, err := c.Folders(t.Context())
+	if err != nil || len(got) != 2 || got[0] != (domain.Folder{ID: 2, Title: "Work", Count: 1}) || got[1] != (domain.Folder{ID: 3, Title: "Work", Count: 1}) {
+		t.Fatalf("folders: %+v, %v", got, err)
+	}
+	filters = filters[:1]
+	got, err = c.Folders(t.Context())
+	if err != nil || len(got) != 0 {
+		t.Fatalf("default-only folders: %+v, %v", got, err)
+	}
+}
+
 func TestHistoryPaginationDoesNotLoseBacklog(t *testing.T) {
 	// Model Telegram's descending IDs, offset_id + add_offset slicing and min_id
 	// post-filtering. Includes ID gaps and more than one server page.

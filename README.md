@@ -95,6 +95,7 @@ Only the API ID and hash come from Telegram's developer portal; the phone number
 | `get_group_info` | `groupUrl` | — |
 | `list_dialogs` | — | `limit`: 100, maximum 500; `archived`: false |
 | `list_folders` | — | — |
+| `list_folder_dialogs` | `folderId` | `limit`: 100, maximum 500 |
 | `get_pinned` | `groupUrl` | `limit`: 20, maximum 50 |
 | `get_media_info` | `groupUrl`, `messageId` | — |
 | `download_media` | `groupUrl`, `messageId` | `maxMB`: overrides the limit; `0` means no limit |
@@ -102,7 +103,9 @@ Only the API ID and hash come from Telegram's developer portal; the phone number
 
 `groupUrl` accepts `@username`, a name without `@`, a `https://t.me/name` URL, a message link, or a numeric **ID as a string** from `list_dialogs`. `https://t.me/c/...` links are supported for private channels. Invite links are not used: the service never joins chats. Numeric IDs are resolved through the account's dialogs, including archived dialogs.
 
-Tool and parameter names match the original; result text is not a byte-for-byte copy. Numeric parameters must be integers. `archived=true` selects only the archive, while `false` selects only the main list. This is the original's actual behavior despite its “include archived” description.
+Existing tool and parameter names match the original; result text is not a byte-for-byte copy. Numeric parameters must be integers. `archived=true` selects only the archive, while `false` selects only the main list. This is the original's actual behavior despite its “include archived” description.
+
+`list_folders` shows each custom folder's `folderId` and its **explicitly included** chat count; automatic rules can add more chats. Pass that integer ID to `list_folder_dialogs`, for example `{"folderId": 2, "limit": 50}`. It returns up to 100 matching chats by default (maximum 500), with marked chat IDs usable by other tools. Pinned chats come first, then other explicit inclusions, then automatic matches from the main list and archive. This order is not Telegram's exact tab order. An empty folder returns explanatory text; a missing ID returns an error. `list_dialogs` keeps its main/archive selection.
 
 `read_messages`, `search_messages`, and `get_pinned` return selected messages in ascending ID order. `[album:...]` labels preserve the complete 64-bit ID as a string, and `[reply:...]` labels explicitly connect replies. `get_message` also shows views, forwards, reactions, and the reply count.
 

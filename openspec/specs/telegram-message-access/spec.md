@@ -82,7 +82,7 @@ Message output SHALL include message ID, UTC timestamp to the second, available 
 
 ### Requirement: Discover chats and folders
 
-`list_dialogs` SHALL expose chat type, title, available username, unread count, and marked string ID, with default limit 100 and cap 500. `archived=false` or omission SHALL select the main dialog list; `archived=true` SHALL select only archived dialogs. `get_group_info` SHALL expose title, ID, type, available username, description, and member count when available. `list_folders` SHALL expose named custom folders with their explicitly included peer counts, excluding the built-in default filter.
+`list_dialogs` SHALL expose chat type, title, available username, unread count, and marked string ID, with default limit 100 and cap 500. `archived=false` or omission SHALL select the main dialog list; `archived=true` SHALL select only archived dialogs. `get_group_info` SHALL expose title, ID, type, available username, description, and member count when available. `list_folders` SHALL expose named custom folders with their integer filter IDs and explicitly included peer counts, excluding the built-in default filter. Counts SHALL be labeled as explicitly included peers, not total computed folder membership.
 
 #### Scenario: Archive selection is exclusive
 
@@ -98,3 +98,63 @@ Message output SHALL include message ID, UTC timestamp to the second, available 
 
 - **WHEN** the account has no named custom folders
 - **THEN** `list_folders` returns explanatory text rather than the built-in default filter
+
+#### Scenario: Same-name folders remain selectable
+
+- **WHEN** two custom folders have the same title
+- **THEN** `list_folders` exposes their distinct IDs for use with `list_folder_dialogs`
+
+### Requirement: List dialogs belonging to a custom folder
+
+`list_folder_dialogs` SHALL select the current account's custom folder by `folderId` and return matching accessible dialogs with chat type, title, available username, unread count, and marked string ID. The default limit SHALL be 100 and positive limits above 500 SHALL be clamped to 500. The limit SHALL apply to matching unique dialogs, not scanned candidates. Folder IDs SHALL refer to custom filters, not main/archive selectors.
+
+Regular folders SHALL honor explicit exclusions before explicit inclusions and pinned peers; explicitly included or pinned peers SHALL bypass automatic category and state exclusions. Other peers SHALL match enabled categories (contacts, non-contacts, bots, groups including supergroups, or broadcast channels) and the folder's read, mute, and archive exclusions. Bots SHALL use the bot category independently of contact status. Read exclusion SHALL account for unread counts, manual unread marks, and unread mentions. Mute exclusion SHALL use effective notification settings, including inherited defaults and mute expiry; an unread mention in a non-archived dialog SHALL retain the Telegram mention exception. Installed shared folders SHALL use their included and pinned peers without joining additional chats.
+
+Dialogs SHALL appear at most once. Pinned peers SHALL appear first in folder order, followed by remaining explicit includes in folder order, then automatic matches in main-list order followed by archive-list order. Exact Telegram UI recency ordering across these groups is not required. Empty folders SHALL return explanatory text. Unknown IDs or failures to retrieve or evaluate required membership data SHALL return tool errors rather than successful partial or unfiltered results. Requests SHALL propagate the existing deadline and cancellation and SHALL NOT alter Telegram account state.
+
+#### Scenario: Explicit membership includes pinned and archived chats
+
+- **WHEN** a folder contains a pinned chat, an explicitly included archived channel, and overlapping peer references
+- **THEN** the tool returns each accessible member once with its marked ID, including the archived channel even if automatic archived chats are excluded
+
+#### Scenario: Automatic categories and explicit exclusions
+
+- **WHEN** a folder includes groups and broadcasts and explicitly excludes one otherwise matching channel
+- **THEN** basic groups, supergroups, and broadcasts qualify while the excluded channel and unrelated users do not
+
+#### Scenario: Read and mute filters use effective state
+
+- **WHEN** automatic membership excludes read and muted chats
+- **THEN** read chats and effectively muted chats are omitted, manual unread marks count as unread, and non-archived unread mentions retain the Telegram exception
+- **AND** an expired mute is treated as unmuted and a missing per-peer mute override uses the applicable notification default
+
+#### Scenario: Archive exclusion applies to automatic matches
+
+- **WHEN** an archived dialog matches an enabled category without an explicit inclusion
+- **THEN** it is included only when the folder does not exclude archived chats
+
+#### Scenario: Installed shared folder is read-only
+
+- **WHEN** the selected folder is an installed shared folder
+- **THEN** the tool lists accessible included and pinned dialogs without joining any chats
+
+#### Scenario: Matching continues beyond unrelated pages
+
+- **WHEN** the first Telegram page contains no matching dialogs but later pages do
+- **THEN** the tool continues until it reaches the effective matching limit or exhausts the relevant dialog lists
+
+#### Scenario: Default and maximum limits
+
+- **WHEN** the caller omits `limit` or requests `limit=1000`
+- **THEN** the tool returns at most 100 or 500 matching dialogs respectively
+
+#### Scenario: Empty and missing folders differ
+
+- **WHEN** an existing folder has no accessible matching dialogs
+- **THEN** the tool returns explanatory empty text
+- **AND** requesting a deleted or unknown folder instead returns an error suggesting refreshing `list_folders`
+
+#### Scenario: Failure cannot masquerade as an empty folder
+
+- **WHEN** retrieving filters, dialog pages, or required notification settings fails or is cancelled
+- **THEN** the tool returns an error without presenting partial membership as success

@@ -26,6 +26,7 @@ func New(service Executor) *mcp.Server {
 		{"global_search", "Search messages across all chats (default 30, max 100).", []string{"query"}, []string{"limit"}},
 		{"list_dialogs", "List chats with marked IDs and unread counts (default 100, max 500). archived=true selects archived chats only, matching the original service.", nil, []string{"limit", "archived"}},
 		{"list_folders", "List configured Telegram chat folders.", nil, nil},
+		{"list_folder_dialogs", "List chats in a custom folder by folderId from list_folders (default 100, max 500).", []string{"folderId"}, []string{"limit"}},
 		{"get_pinned", "Read pinned messages (default 20, max 50).", []string{"groupUrl"}, []string{"limit"}},
 		{"get_media_info", "Inspect media without downloading it.", []string{"groupUrl", "messageId"}, nil},
 		{"download_media", "Download media to a local file. maxMB overrides the default limit; 0 means unlimited.", []string{"groupUrl", "messageId"}, []string{"maxMB"}},
@@ -43,6 +44,9 @@ func New(service Executor) *mcp.Server {
 				p = map[string]any{"type": "boolean"}
 			case "sinceId", "maxMB":
 				p["minimum"] = 0
+			case "folderId":
+				p["minimum"] = 2
+				p["maximum"] = 2147483647
 			}
 			properties[key] = p
 		}
