@@ -35,6 +35,7 @@ type resolved struct {
 	input     tg.InputPeerClass
 	info      domain.Chat
 	protected bool
+	known     bool // the peer's entity was present, so info and protected are current
 }
 
 func normalize(raw string) (string, error) {
@@ -141,17 +142,17 @@ func describe(p tg.PeerClass, entities peer.Entities) resolved {
 	case *tg.PeerUser:
 		r.info.ID, r.info.Type = strconv.FormatInt(p.UserID, 10), "User"
 		if u, ok := entities.User(p.UserID); ok {
-			r.info.Title, r.info.Username = strings.TrimSpace(u.FirstName+" "+u.LastName), u.Username
+			r.known, r.info.Title, r.info.Username = true, strings.TrimSpace(u.FirstName+" "+u.LastName), u.Username
 		}
 	case *tg.PeerChat:
 		r.info.ID, r.info.Type = strconv.FormatInt(-p.ChatID, 10), "Chat"
 		if chat, ok := entities.Chat(p.ChatID); ok {
-			r.info.Title, r.info.Members, r.protected = chat.Title, new(chat.ParticipantsCount), chat.Noforwards
+			r.known, r.info.Title, r.info.Members, r.protected = true, chat.Title, new(chat.ParticipantsCount), chat.Noforwards
 		}
 	case *tg.PeerChannel:
 		r.info.ID, r.info.Type = strconv.FormatInt(-1000000000000-p.ChannelID, 10), "Channel"
 		if channel, ok := entities.Channel(p.ChannelID); ok {
-			r.info.Title, r.info.Username, r.protected = channel.Title, channel.Username, channel.Noforwards
+			r.known, r.info.Title, r.info.Username, r.protected = true, channel.Title, channel.Username, channel.Noforwards
 			if n, ok := channel.GetParticipantsCount(); ok {
 				r.info.Members = new(n)
 			}
@@ -161,6 +162,11 @@ func describe(p tg.PeerClass, entities peer.Entities) resolved {
 		r.info.Username = "@" + r.info.Username
 	}
 	return r
+}
+
+func fullEntities(users []tg.UserClass, chats []tg.ChatClass) peer.Entities {
+	cs := tg.ChatClassArray(chats)
+	return peer.NewEntities(tg.UserClassArray(users).UserToMap(), cs.ChatToMap(), cs.ChannelToMap())
 }
 
 func (c *Client) Dialogs(ctx context.Context, limit int, archived bool) ([]domain.Chat, error) {
@@ -192,12 +198,21 @@ func (c *Client) Folders(ctx context.Context) ([]domain.Folder, error) {
 	for _, f := range r.Filters {
 		switch f := f.(type) {
 		case *tg.DialogFilter:
-			result = append(result, domain.Folder{ID: f.ID, Title: f.Title.Text, Count: len(f.PinnedPeers) + len(f.IncludePeers)})
+			result = append(result, domain.Folder{ID: f.ID, Title: f.Title.Text, Count: explicitCount(f.PinnedPeers, f.IncludePeers)})
 		case *tg.DialogFilterChatlist:
-			result = append(result, domain.Folder{ID: f.ID, Title: f.Title.Text, Count: len(f.PinnedPeers) + len(f.IncludePeers)})
+			result = append(result, domain.Folder{ID: f.ID, Title: f.Title.Text, Count: explicitCount(f.PinnedPeers, f.IncludePeers)})
 		}
 	}
 	return result, nil
+}
+
+// explicitCount counts unique peers; pinned peers may also appear in the include list.
+func explicitCount(pinned, included []tg.InputPeerClass) int {
+	seen := map[string]bool{}
+	for _, p := range slices.Concat(pinned, included) {
+		seen[folderInputKey(p)] = true
+	}
+	return len(seen)
 }
 
 func (c *Client) Chat(ctx context.Context, name string) (domain.Chat, error) {
@@ -206,20 +221,35 @@ func (c *Client) Chat(ctx context.Context, name string) (domain.Chat, error) {
 		return domain.Chat{}, err
 	}
 	var full *tg.MessagesChatFull
+	var current peer.Entities
+	var self tg.PeerClass
 	switch p := r.input.(type) {
 	case *tg.InputPeerChannel:
+		self = &tg.PeerChannel{ChannelID: p.ChannelID}
 		full, err = c.api.ChannelsGetFullChannel(ctx, &tg.InputChannel{ChannelID: p.ChannelID, AccessHash: p.AccessHash})
 	case *tg.InputPeerChat:
+		self = &tg.PeerChat{ChatID: p.ChatID}
 		full, err = c.api.MessagesGetFullChat(ctx, p.ChatID)
 	case *tg.InputPeerUser:
 		u, userErr := c.api.UsersGetFullUser(ctx, &tg.InputUser{UserID: p.UserID, AccessHash: p.AccessHash})
 		if userErr != nil {
 			return domain.Chat{}, userErr
 		}
+		self, current = &tg.PeerUser{UserID: p.UserID}, fullEntities(u.Users, u.Chats)
 		r.info.About = u.FullUser.About
 	}
 	if err != nil {
 		return domain.Chat{}, err
+	}
+	if full != nil {
+		current = fullEntities(full.Users, full.Chats)
+	}
+	// Cached peers can carry stale metadata; prefer the entity from this response.
+	if fresh := describe(self, current); fresh.known {
+		r.info.Title, r.info.Username = fresh.info.Title, fresh.info.Username
+		if fresh.info.Members != nil {
+			r.info.Members = fresh.info.Members
+		}
 	}
 	if full != nil {
 		switch f := full.FullChat.(type) {

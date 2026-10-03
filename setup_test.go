@@ -431,3 +431,31 @@ func TestSetupDeliveryChannels(t *testing.T) {
 		})
 	}
 }
+
+func TestSetupRetryKeepsResendDeadline(t *testing.T) {
+	first := sentCode("hash1")
+	first.SetNextType(&tg.AuthCodeTypeSMS{})
+	first.SetTimeout(30)
+	client := &loginClient{replies: []codeReply{{code: first}, {code: sentCode("hash2")}}, signErr: []error{tgerr.New(400, "PHONE_CODE_INVALID")}}
+	current := time.Unix(0, 0)
+	inputs := []string{"typo", "resend", "code2"}
+	read := func(context.Context, string, bool) (string, error) {
+		if len(inputs) == 0 {
+			t.Fatal("unexpected prompt")
+		}
+		input := inputs[0]
+		inputs = inputs[1:]
+		if input == "typo" {
+			current = current.Add(30 * time.Second) // original timeout elapses before the typo
+		}
+		return input, nil
+	}
+	var out bytes.Buffer
+	if err := setupLogin(t.Context(), client, "phone", read, &out, func() time.Time { return current }); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"status", "send:phone", "signin:phone:typo:hash1", "resend:phone:hash1", "signin:phone:code2:hash2"}
+	if !slices.Equal(client.calls, want) || strings.Contains(out.String(), "Wait ") {
+		t.Fatalf("calls = %v, out = %s", client.calls, &out)
+	}
+}

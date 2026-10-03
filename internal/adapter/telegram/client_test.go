@@ -40,7 +40,7 @@ func TestNormalize(t *testing.T) {
 func TestFoldersExposeIDs(t *testing.T) {
 	filters := []tg.DialogFilterClass{
 		&tg.DialogFilterDefault{},
-		&tg.DialogFilter{ID: 2, Title: tg.TextWithEntities{Text: "Work"}, PinnedPeers: []tg.InputPeerClass{&tg.InputPeerChat{ChatID: 3}, &tg.InputPeerChat{ChatID: 4}}, IncludePeers: []tg.InputPeerClass{&tg.InputPeerChat{ChatID: 1}}},
+		&tg.DialogFilter{ID: 2, Title: tg.TextWithEntities{Text: "Work"}, PinnedPeers: []tg.InputPeerClass{&tg.InputPeerChat{ChatID: 3}, &tg.InputPeerChat{ChatID: 4}}, IncludePeers: []tg.InputPeerClass{&tg.InputPeerChat{ChatID: 1}, &tg.InputPeerChat{ChatID: 3}}},
 		&tg.DialogFilterChatlist{ID: 3, Title: tg.TextWithEntities{Text: "Work"}, IncludePeers: []tg.InputPeerClass{&tg.InputPeerChannel{ChannelID: 2}}},
 	}
 	c := &Client{api: tg.NewClient(invokeFunc(func(_ context.Context, in bin.Encoder, out bin.Decoder) error {
@@ -239,12 +239,12 @@ func TestDownloadFilesArePrivateBoundedAndCleanedUp(t *testing.T) {
 	}
 }
 
-func downloadClient(t *testing.T, dir string, protected bool) (*Client, *int) {
+func downloadClient(t *testing.T, dir string, cachedProtected, protected bool) (*Client, *int) {
 	fetched := 0
 	return &Client{downloadDir: dir, api: tg.NewClient(invokeFunc(func(_ context.Context, in bin.Encoder, out bin.Decoder) error {
 		switch r := in.(type) {
 		case *tg.ContactsResolveUsernameRequest:
-			*out.(*tg.ContactsResolvedPeer) = tg.ContactsResolvedPeer{Peer: &tg.PeerChannel{ChannelID: 7}, Chats: []tg.ChatClass{&tg.Channel{ID: 7, AccessHash: 8}}}
+			*out.(*tg.ContactsResolvedPeer) = tg.ContactsResolvedPeer{Peer: &tg.PeerChannel{ChannelID: 7}, Chats: []tg.ChatClass{&tg.Channel{ID: 7, AccessHash: 8, Noforwards: cachedProtected}}}
 		case *tg.ChannelsGetMessagesRequest:
 			doc := &tg.Document{ID: 1, Size: 5, MimeType: "application/pdf", Attributes: []tg.DocumentAttributeClass{&tg.DocumentAttributeFilename{FileName: "report.pdf"}}}
 			out.(*tg.MessagesMessagesBox).Messages = &tg.MessagesChannelMessages{
@@ -267,7 +267,7 @@ func downloadClient(t *testing.T, dir string, protected bool) (*Client, *int) {
 
 func TestDownloadUsesAPIClient(t *testing.T) {
 	dir := t.TempDir()
-	c, fetched := downloadClient(t, dir, false)
+	c, fetched := downloadClient(t, dir, true, false) // protection lifted since resolution
 	f, err := c.Download(t.Context(), "chan", 3, false, 0)
 	if err != nil || *fetched == 0 {
 		t.Fatalf("download: %+v, %v", f, err)
@@ -280,7 +280,7 @@ func TestDownloadUsesAPIClient(t *testing.T) {
 
 func TestDownloadHonorsFreshProtection(t *testing.T) {
 	dir := t.TempDir()
-	c, fetched := downloadClient(t, dir, true)
+	c, fetched := downloadClient(t, dir, false, true)
 	if _, err := c.Download(t.Context(), "chan", 3, false, 0); err == nil || *fetched != 0 {
 		t.Fatalf("protected download: %v, fetched %d", err, *fetched)
 	}
@@ -327,5 +327,21 @@ func TestSelfChatHasAbout(t *testing.T) {
 	chat, err := c.Chat(t.Context(), "5")
 	if err != nil || chat.About != "bio" {
 		t.Fatalf("self chat: %+v, %v", chat, err)
+	}
+}
+
+func TestChatRefreshesCachedMetadata(t *testing.T) {
+	c := &Client{}
+	c.store("-1000000000042", resolved{input: &tg.InputPeerChannel{ChannelID: 42, AccessHash: 99}, info: domain.Chat{ID: "-1000000000042", Title: "Old", Type: "Channel"}, known: true})
+	c.api = tg.NewClient(invokeFunc(func(_ context.Context, in bin.Encoder, out bin.Decoder) error {
+		if _, ok := in.(*tg.ChannelsGetFullChannelRequest); !ok {
+			t.Fatalf("unexpected %T", in)
+		}
+		*out.(*tg.MessagesChatFull) = tg.MessagesChatFull{FullChat: &tg.ChannelFull{About: "bio"}, Chats: []tg.ChatClass{&tg.Channel{ID: 42, Title: "New", Username: "renamed"}}}
+		return nil
+	}))
+	chat, err := c.Chat(t.Context(), "-1000000000042")
+	if err != nil || chat.Title != "New" || chat.Username != "@renamed" || chat.About != "bio" || chat.ID != "-1000000000042" {
+		t.Fatalf("chat: %+v, %v", chat, err)
 	}
 }

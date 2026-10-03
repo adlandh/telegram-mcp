@@ -44,6 +44,9 @@ func setupLogin(ctx context.Context, client setupClient, phone string, read setu
 	}
 	response, err := client.SendCode(ctx, phone, auth.SendCodeOptions{})
 	stage := "request login code"
+	// The resend deadline belongs to a delivery response, so code retries keep it.
+	var eligible time.Time
+	retry := false
 	for {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
@@ -66,14 +69,19 @@ func setupLogin(ctx context.Context, client setupClient, phone string, read setu
 			if sent == nil || sent.PhoneCodeHash == "" {
 				return errors.New("received incomplete login-code information from Telegram")
 			}
-			delivery, deliveryErr := codeDelivery(sent.Type)
-			if deliveryErr != nil {
-				return deliveryErr
+			if !retry {
+				delivery, deliveryErr := codeDelivery(sent.Type)
+				if deliveryErr != nil {
+					return deliveryErr
+				}
+				if _, err := fmt.Fprintf(out, "Telegram reports delivery via %s. Receipt is not confirmed.\n", delivery); err != nil {
+					return loginError("display delivery method", err)
+				}
+				timeout, _ := sent.GetTimeout()
+				eligible = now().Add(time.Duration(max(timeout, 0)) * time.Second)
 			}
-			if _, err := fmt.Fprintf(out, "Telegram reports delivery via %s. Receipt is not confirmed.\n", delivery); err != nil {
-				return loginError("display delivery method", err)
-			}
-			code, resend, promptErr := setupCode(ctx, sent, read, out, now)
+			retry = false
+			code, resend, promptErr := setupCode(ctx, sent, eligible, read, out, now)
 			if promptErr != nil {
 				return promptErr
 			}
@@ -91,7 +99,7 @@ func setupLogin(ctx context.Context, client setupClient, phone string, read setu
 				if _, err := fmt.Fprintln(out, "Telegram rejected the code (PHONE_CODE_INVALID); enter it again."); err != nil {
 					return loginError("display retry instructions", err)
 				}
-				response, err = sent, nil
+				response, err, retry = sent, nil, true
 				continue
 			}
 			return loginError("sign in", err)
@@ -101,13 +109,12 @@ func setupLogin(ctx context.Context, client setupClient, phone string, read setu
 	}
 }
 
-func setupCode(ctx context.Context, sent *tg.AuthSentCode, read setupPrompt, out io.Writer, now func() time.Time) (string, bool, error) {
-	timeout, _ := sent.GetTimeout()
-	eligible := now().Add(time.Duration(max(timeout, 0)) * time.Second)
+func setupCode(ctx context.Context, sent *tg.AuthSentCode, eligible time.Time, read setupPrompt, out io.Writer, now func() time.Time) (string, bool, error) {
 	next, available := sent.GetNextType()
 	available = available && next != nil
 	if available {
-		if _, err := fmt.Fprintf(out, "No code? Enter resend after %d seconds to request Telegram's next delivery method.\n", max(timeout, 0)); err != nil {
+		wait := max(eligible.Sub(now())+time.Second-1, 0) / time.Second
+		if _, err := fmt.Fprintf(out, "No code? Enter resend after %d seconds to request Telegram's next delivery method.\n", wait); err != nil {
 			return "", false, loginError("display resend instructions", err)
 		}
 	} else {

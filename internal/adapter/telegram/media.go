@@ -195,7 +195,7 @@ type cappedWriter struct {
 
 func (w *cappedWriter) Write(p []byte) (int, error) {
 	if w.limit > 0 && int64(len(p)) > w.limit-w.written {
-		return 0, fmt.Errorf("download exceeds size limit; raise maxMB or use 0 for unlimited")
+		return 0, fmt.Errorf("download exceeds the effective size limit; maxMB can only lower TELEGRAM_MAX_DOWNLOAD_MB")
 	}
 	n, err := w.writer.Write(p)
 	w.written += int64(n)
@@ -211,8 +211,12 @@ func (c *Client) Download(ctx context.Context, chat string, id int, preview bool
 	if !ok {
 		return domain.Download{}, fmt.Errorf("message has no downloadable media")
 	}
-	// Fresh response entities catch protection enabled after the peer was cached.
-	if m.Noforwards || r.protected || describe(m.PeerID, entities).protected {
+	// Fresh response entities supersede cached protection in both directions.
+	protected := r.protected
+	if fresh := describe(m.PeerID, entities); fresh.known {
+		protected = fresh.protected
+	}
+	if m.Noforwards || protected {
 		return domain.Download{}, fmt.Errorf("this chat restricts saving content (no-forward)")
 	}
 	file, err := fileFor(m, preview)
@@ -220,7 +224,7 @@ func (c *Client) Download(ctx context.Context, chat string, id int, preview bool
 		return domain.Download{}, err
 	}
 	if maxBytes > 0 && file.size > maxBytes {
-		return domain.Download{}, fmt.Errorf("file exceeds size limit; raise maxMB or use 0 for unlimited")
+		return domain.Download{}, fmt.Errorf("file exceeds the effective size limit; maxMB can only lower TELEGRAM_MAX_DOWNLOAD_MB")
 	}
 	return saveDownload(c.downloadDir, fmt.Sprintf("%s_%d_%s", r.info.ID, id, safeName(file.name)), maxBytes, func(w io.Writer) error {
 		if err := ctx.Err(); err != nil {
