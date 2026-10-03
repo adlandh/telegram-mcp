@@ -17,7 +17,7 @@ Inspect Telegram message media and safely save full files or lightweight preview
 
 ### Requirement: Bounded full-media downloads
 
-`download_media` SHALL save supported media under `TELEGRAM_DOWNLOAD_DIR` and return its path and actual size. The effective limit SHALL default to `TELEGRAM_MAX_DOWNLOAD_MB` and SHALL be overridden by `maxMB` for that call; zero SHALL mean unlimited. A nonzero limit SHALL be enforced both against available size metadata before transfer and against bytes actually written. Files stored in a Telegram data center different from the account's current data center SHALL be fetched from the appropriate location.
+`download_media` SHALL save supported media under `TELEGRAM_DOWNLOAD_DIR` and return its path and actual size. `TELEGRAM_MAX_DOWNLOAD_MB` SHALL be a ceiling: a positive `maxMB` SHALL apply only when it lowers the effective limit for that call, and an omitted or zero `maxMB` SHALL use the configured limit. Only a configured limit of zero SHALL mean unlimited; callers SHALL NOT be able to raise or disable the configured limit. A nonzero limit SHALL be enforced both against available size metadata before transfer and against bytes actually written. Files stored in a Telegram data center different from the account's current data center SHALL be fetched from the appropriate location.
 
 #### Scenario: Default size limit rejects oversized media
 
@@ -29,9 +29,19 @@ Inspect Telegram message media and safely save full files or lightweight preview
 - **WHEN** a transfer writes more bytes than its reported metadata size and exceeds the effective limit
 - **THEN** the server removes the partial file and returns an error
 
+#### Scenario: Caller cannot raise the configured limit
+
+- **WHEN** the configured limit is 200 MiB and a caller sets `maxMB=0` or `maxMB=500` for a message reporting a 300 MiB payload
+- **THEN** the server rejects the download before transfer
+
+#### Scenario: Caller can lower the configured limit
+
+- **WHEN** the configured limit is 200 MiB and a caller sets `maxMB=10` for a message reporting a 50 MiB payload
+- **THEN** the server rejects the download before transfer
+
 #### Scenario: Unlimited per-call download remains cancellable
 
-- **WHEN** a caller sets `maxMB=0`
+- **WHEN** `TELEGRAM_MAX_DOWNLOAD_MB=0` and the caller omits `maxMB`
 - **THEN** the size limit is disabled for that call while request deadlines still apply
 
 ### Requirement: Lightweight thumbnails
@@ -59,7 +69,7 @@ Both download tools SHALL reject media when the resolved chat or target message 
 
 ### Requirement: Private and isolated local files
 
-Downloads SHALL sanitize untrusted filename components, stay inside the configured directory, create unique owner-only 0600 files, and not overwrite earlier downloads with the same source name. Newly created download directories SHALL use permissions 0700. Successful results SHALL reference completed files; failed transfers SHALL remove partial files during normal error handling.
+Downloads SHALL sanitize untrusted filename components, stay inside the configured directory, create unique owner-only 0600 files, and not overwrite earlier downloads with the same source name. When a sanitized name is shortened, the original file extension SHALL be preserved. Newly created download directories SHALL use permissions 0700. Successful results SHALL reference completed files; failed transfers SHALL remove partial files during normal error handling.
 
 #### Scenario: Repeated unsafe filename creates separate private files
 
@@ -70,3 +80,8 @@ Downloads SHALL sanitize untrusted filename components, stay inside the configur
 
 - **WHEN** a transfer is interrupted
 - **THEN** its partial file is removed during normal error handling
+
+#### Scenario: Long filename keeps its extension
+
+- **WHEN** a document named with 80 characters and ending in `.pdf` is downloaded
+- **THEN** the saved filename is shortened and still ends in `.pdf`

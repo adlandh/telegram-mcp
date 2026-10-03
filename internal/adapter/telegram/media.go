@@ -2,7 +2,6 @@ package telegram
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -74,7 +73,6 @@ func photoBytes(size tg.PhotoSizeClass) int64 {
 type mediaFile struct {
 	location tg.InputFileLocationClass
 	data     []byte
-	dc       int
 	size     int64
 	name     string
 }
@@ -120,7 +118,7 @@ func fileFor(m *tg.Message, preview bool) (mediaFile, error) {
 		if !ok {
 			return file, fmt.Errorf("photo is unavailable")
 		}
-		file.dc, file.name, sizes = photo.DCID, "photo.jpg", photo.Sizes
+		file.name, sizes = "photo.jpg", photo.Sizes
 		location = func(size string) tg.InputFileLocationClass { return photo.AsInputPhotoFileLocation(size) }
 	case *tg.MessageMediaDocument:
 		doc, ok := media.Document.(*tg.Document)
@@ -128,7 +126,7 @@ func fileFor(m *tg.Message, preview bool) (mediaFile, error) {
 			return file, fmt.Errorf("document is unavailable")
 		}
 		info := mediaInfo(m)
-		file.dc, file.name, file.size = doc.DCID, info.FileName, doc.Size
+		file.name, file.size = info.FileName, doc.Size
 		if file.name == "" {
 			ext := map[string]string{"video/mp4": ".mp4", "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "audio/ogg": ".ogg", "audio/mpeg": ".mp3", "application/pdf": ".pdf", "application/zip": ".zip"}[doc.MimeType]
 			if ext == "" {
@@ -174,9 +172,15 @@ func safeName(name string) string {
 		}
 		return r
 	}, name)
-	runes := []rune(strings.Trim(name, " ."))
+	name = strings.Trim(name, " .")
+	runes := []rune(name)
 	if len(runes) > 50 {
-		runes = runes[:50]
+		// Keep a short extension so the file stays openable by type.
+		ext := []rune(filepath.Ext(name))
+		if len(ext) > 10 {
+			ext = nil
+		}
+		runes = append(runes[:50-len(ext)], ext...)
 	}
 	if len(runes) == 0 {
 		return "media.bin"
@@ -199,7 +203,7 @@ func (w *cappedWriter) Write(p []byte) (int, error) {
 }
 
 func (c *Client) Download(ctx context.Context, chat string, id int, preview bool, maxBytes int64) (domain.Download, error) {
-	raw, _, r, err := c.rawMessage(ctx, chat, id)
+	raw, entities, r, err := c.rawMessage(ctx, chat, id)
 	if err != nil {
 		return domain.Download{}, err
 	}
@@ -207,7 +211,8 @@ func (c *Client) Download(ctx context.Context, chat string, id int, preview bool
 	if !ok {
 		return domain.Download{}, fmt.Errorf("message has no downloadable media")
 	}
-	if m.Noforwards || r.protected {
+	// Fresh response entities catch protection enabled after the peer was cached.
+	if m.Noforwards || r.protected || describe(m.PeerID, entities).protected {
 		return domain.Download{}, fmt.Errorf("this chat restricts saving content (no-forward)")
 	}
 	file, err := fileFor(m, preview)
@@ -225,13 +230,9 @@ func (c *Client) Download(ctx context.Context, chat string, id int, preview bool
 			_, err := w.Write(file.data)
 			return err
 		}
-		// Files may live in a different Telegram DC from the account session.
-		pool, err := c.client.DC(ctx, file.dc, 1)
-		if err != nil {
-			return err
-		}
-		_, downloadErr := downloader.NewDownloader().Download(tg.NewClient(pool), file.location).Stream(ctx, w)
-		return errors.Join(downloadErr, pool.Close())
+		// gotd follows FILE_MIGRATE to other DCs and caches those connections.
+		_, err := downloader.NewDownloader().Download(c.api, file.location).Stream(ctx, w)
+		return err
 	})
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -77,10 +78,8 @@ func run(ctx context.Context, args []string) error {
 	} else if _, err := os.Stat(cfg.SessionPath); err != nil {
 		return fmt.Errorf("session unavailable; run telegram-mcp setup first: %w", err)
 	}
-	if _, err := os.Stat(cfg.SessionPath); err == nil {
-		if err := os.Chmod(cfg.SessionPath, 0600); err != nil {
-			return err
-		}
+	if err := os.Chmod(cfg.SessionPath, 0600); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
 	}
 	return client.Run(ctx, func(ctx context.Context) error {
 		if setup {
@@ -141,7 +140,6 @@ func prompt(ctx context.Context, label string, trim bool) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer clear(b)
 	value := string(b)
 	if trim {
 		value = strings.TrimSpace(value)

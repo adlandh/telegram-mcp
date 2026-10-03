@@ -78,7 +78,7 @@ Only the API ID and hash come from Telegram's developer portal; the phone number
 | `TELEGRAM_PHONE` | Required for `setup` (unused by `setup qr`) | Phone number with country calling code |
 | `TELEGRAM_SESSION_PATH` | `~/.telegram-mcp/session.json` | gotd authorized-session file |
 | `TELEGRAM_DOWNLOAD_DIR` | `~/.telegram-mcp/downloads` | Directory for downloaded files |
-| `TELEGRAM_MAX_DOWNLOAD_MB` | `200` | Download limit in MiB; `0` disables the limit |
+| `TELEGRAM_MAX_DOWNLOAD_MB` | `200` | Download limit in MiB and ceiling for `maxMB`; `0` disables the limit |
 | `TELEGRAM_REQUEST_TIMEOUT` | `5m` | Total timeout for a tool call, including downloads |
 
 `~/` in paths expands to the home directory; relative paths are resolved from the working directory. The session is authorization state, separate from environment configuration. It is incompatible with a GramJS string session; run `setup` again. The session file grants access to the account; do not commit `.env`, session files, or downloaded files to Git.
@@ -98,7 +98,7 @@ Only the API ID and hash come from Telegram's developer portal; the phone number
 | `list_folder_dialogs` | `folderId` | `limit`: 100, maximum 500 |
 | `get_pinned` | `groupUrl` | `limit`: 20, maximum 50 |
 | `get_media_info` | `groupUrl`, `messageId` | — |
-| `download_media` | `groupUrl`, `messageId` | `maxMB`: overrides the limit; `0` means no limit |
+| `download_media` | `groupUrl`, `messageId` | `maxMB`: lowers the configured limit; `0` or omitted uses it |
 | `get_thumbnail` | `groupUrl`, `messageId` | — |
 
 `groupUrl` accepts `@username`, a name without `@`, a `https://t.me/name` URL, a message link, or a numeric **ID as a string** from `list_dialogs`. `https://t.me/c/...` links are supported for private channels. Invite links are not used: the service never joins chats. Numeric IDs are resolved through the account's dialogs, including archived dialogs.

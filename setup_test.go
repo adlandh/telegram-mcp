@@ -26,7 +26,7 @@ type loginClient struct {
 	status               auth.Status
 	statusErr            error
 	replies              []codeReply
-	signErr, passwordErr error
+	signErr, passwordErr []error // consumed per call; nil once exhausted
 	calls                []string
 }
 
@@ -56,12 +56,21 @@ func (c *loginClient) reply() (tg.AuthSentCodeClass, error) {
 
 func (c *loginClient) SignIn(_ context.Context, phone, code, hash string) (*tg.AuthAuthorization, error) {
 	c.calls = append(c.calls, "signin:"+phone+":"+code+":"+hash)
-	return &tg.AuthAuthorization{}, c.signErr
+	return &tg.AuthAuthorization{}, nextErr(&c.signErr)
 }
 
 func (c *loginClient) Password(_ context.Context, password string) (*tg.AuthAuthorization, error) {
 	c.calls = append(c.calls, "password:"+password)
-	return &tg.AuthAuthorization{}, c.passwordErr
+	return &tg.AuthAuthorization{}, nextErr(&c.passwordErr)
+}
+
+func nextErr(errs *[]error) error {
+	if len(*errs) == 0 {
+		return nil
+	}
+	err := (*errs)[0]
+	*errs = (*errs)[1:]
+	return err
 }
 
 func sentCode(hash string) *tg.AuthSentCode {
@@ -93,13 +102,13 @@ func TestSetupLogin(t *testing.T) {
 		{"signup response", func(c *loginClient) {
 			c.replies[0].code = &tg.AuthSentCodeSuccess{Authorization: &tg.AuthAuthorizationSignUpRequired{}}
 		}, nil, "registration is not supported", []string{"status", "send:secret-phone"}},
-		{"signup signin", func(c *loginClient) { c.signErr = &auth.SignUpRequired{} }, []string{"secret-code"}, "registration is not supported", []string{"status", "send:secret-phone", "signin:secret-phone:secret-code:secret-hash"}},
-		{"2FA", func(c *loginClient) { c.signErr = auth.ErrPasswordAuthNeeded }, []string{"secret-code", " secret-password "}, "", []string{"status", "send:secret-phone", "signin:secret-phone:secret-code:secret-hash", "password: secret-password "}},
+		{"signup signin", func(c *loginClient) { c.signErr = []error{&auth.SignUpRequired{}} }, []string{"secret-code"}, "registration is not supported", []string{"status", "send:secret-phone", "signin:secret-phone:secret-code:secret-hash"}},
+		{"2FA", func(c *loginClient) { c.signErr = []error{auth.ErrPasswordAuthNeeded} }, []string{"secret-code", " secret-password "}, "", []string{"status", "send:secret-phone", "signin:secret-phone:secret-code:secret-hash", "password: secret-password "}},
 		{"initial 2FA", func(c *loginClient) { c.replies[0].err = tgerr.New(401, "SESSION_PASSWORD_NEEDED") }, []string{" secret-password "}, "", []string{"status", "send:secret-phone", "password: secret-password "}},
 		{"wrong password", func(c *loginClient) {
-			c.signErr = auth.ErrPasswordAuthNeeded
-			c.passwordErr = auth.ErrPasswordInvalid
-		}, []string{"secret-code", "secret-password"}, "incorrect 2FA password", []string{"status", "send:secret-phone", "signin:secret-phone:secret-code:secret-hash", "password:secret-password"}},
+			c.signErr = []error{auth.ErrPasswordAuthNeeded}
+			c.passwordErr = []error{auth.ErrPasswordInvalid}
+		}, []string{"secret-code", "secret-wrong", "secret-password"}, "", []string{"status", "send:secret-phone", "signin:secret-phone:secret-code:secret-hash", "password:secret-wrong", "password:secret-password"}},
 		{"nil response", func(c *loginClient) { c.replies[0].code = nil }, nil, "unsupported Telegram authorization", []string{"status", "send:secret-phone"}},
 		{"typed nil response", func(c *loginClient) { c.replies[0].code = (*tg.AuthSentCode)(nil) }, nil, "incomplete", []string{"status", "send:secret-phone"}},
 		{"nil delivery", func(c *loginClient) { c.replies[0].code = &tg.AuthSentCode{PhoneCodeHash: "secret-hash"} }, nil, "unsupported Telegram code delivery", []string{"status", "send:secret-phone"}},
@@ -107,7 +116,8 @@ func TestSetupLogin(t *testing.T) {
 			c.replies[0].code = &tg.AuthSentCode{PhoneCodeHash: "secret-hash", Type: &tg.AuthSentCodeTypeEmailCode{EmailPattern: "secret-email"}}
 		}, nil, "official Telegram client", []string{"status", "send:secret-phone"}},
 		{"flood wait", func(c *loginClient) { c.replies[0].err = tgerr.New(420, "FLOOD_WAIT_30") }, nil, "retry after 30s", []string{"status", "send:secret-phone"}},
-		{"invalid code", func(c *loginClient) { c.signErr = tgerr.New(400, "PHONE_CODE_INVALID") }, []string{"secret-code"}, "PHONE_CODE_INVALID", []string{"status", "send:secret-phone", "signin:secret-phone:secret-code:secret-hash"}},
+		{"invalid code", func(c *loginClient) { c.signErr = []error{tgerr.New(400, "PHONE_CODE_INVALID")} }, []string{"secret-typo", "secret-code"}, "", []string{"status", "send:secret-phone", "signin:secret-phone:secret-typo:secret-hash", "signin:secret-phone:secret-code:secret-hash"}},
+		{"expired code", func(c *loginClient) { c.signErr = []error{tgerr.New(400, "PHONE_CODE_EXPIRED")} }, []string{"secret-code"}, "PHONE_CODE_EXPIRED", []string{"status", "send:secret-phone", "signin:secret-phone:secret-code:secret-hash"}},
 		{"sensitive error", func(c *loginClient) {
 			c.replies[0].err = fmt.Errorf("secret-payload: %w", tgerr.New(400, "secret-rpc"))
 		}, nil, "request login code: failed", []string{"status", "send:secret-phone"}},
@@ -269,9 +279,10 @@ func TestSetupPromptFailureAndCancellation(t *testing.T) {
 }
 
 type qrLoginClient struct {
-	authErr, passwordErr error
-	shown                []string
-	calls                []string
+	authErr     error
+	passwordErr []error
+	shown       []string
+	calls       []string
 }
 
 func (c *qrLoginClient) Auth(ctx context.Context, _ qrlogin.LoggedIn, show func(context.Context, qrlogin.Token) error, _ ...int64) (*tg.AuthAuthorization, error) {
@@ -288,7 +299,7 @@ func (c *qrLoginClient) Auth(ctx context.Context, _ qrlogin.LoggedIn, show func(
 
 func (c *qrLoginClient) Password(_ context.Context, password string) (*tg.AuthAuthorization, error) {
 	c.calls = append(c.calls, "password:"+password)
-	return &tg.AuthAuthorization{}, c.passwordErr
+	return &tg.AuthAuthorization{}, nextErr(&c.passwordErr)
 }
 
 func TestSetupQR(t *testing.T) {
@@ -337,6 +348,22 @@ func TestSetupQRPassword(t *testing.T) {
 			t.Fatal("password leaked to diagnostics")
 		}
 	}
+	t.Run("retry incorrect password", func(t *testing.T) {
+		client := &qrLoginClient{authErr: auth.ErrPasswordAuthNeeded, passwordErr: []error{auth.ErrPasswordInvalid}}
+		var out bytes.Buffer
+		inputs := []string{"secret-wrong", "secret-password"}
+		read := func(context.Context, string, bool) (string, error) {
+			input := inputs[0]
+			inputs = inputs[1:]
+			return input, nil
+		}
+		if err := setupQR(t.Context(), client, client, nil, &out, read); err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(client.calls, []string{"password:secret-wrong", "password:secret-password"}) || !strings.Contains(out.String(), "Incorrect 2FA password") || strings.Contains(out.String(), "secret-") {
+			t.Fatalf("calls = %v, out = %q", client.calls, &out)
+		}
+	})
 }
 
 func TestSetupQRFailureAndCancellation(t *testing.T) {

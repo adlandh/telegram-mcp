@@ -29,7 +29,7 @@ func New(service Executor) *mcp.Server {
 		{"list_folder_dialogs", "List chats in a custom folder by folderId from list_folders (default 100, max 500).", []string{"folderId"}, []string{"limit"}},
 		{"get_pinned", "Read pinned messages (default 20, max 50).", []string{"groupUrl"}, []string{"limit"}},
 		{"get_media_info", "Inspect media without downloading it.", []string{"groupUrl", "messageId"}, nil},
-		{"download_media", "Download media to a local file. maxMB overrides the default limit; 0 means unlimited.", []string{"groupUrl", "messageId"}, []string{"maxMB"}},
+		{"download_media", "Download media to a local file. maxMB can only lower the configured limit; 0 or omitted uses it.", []string{"groupUrl", "messageId"}, []string{"maxMB"}},
 		{"get_thumbnail", "Download only a media preview to a local file.", []string{"groupUrl", "messageId"}, nil},
 	} {
 		properties := map[string]any{}

@@ -83,7 +83,7 @@ The setup command SHALL authenticate an existing Telegram user account, requesti
 
 Before requesting a code, setup SHALL describe Telegram's reported delivery method on stderr, distinguishing an in-app service notification, SMS (including word or phrase), voice call, and other delivery types. It SHALL NOT equate a successful code request with confirmed receipt. Delivery types requiring an unimplemented authentication flow SHALL produce an actionable explanation instead of a generic code prompt. Sensitive response payloads, code hashes, login codes, passwords, and full phone numbers SHALL NOT appear in diagnostics.
 
-At a supported code prompt, setup SHALL accept `resend` as an explicit recovery action. It SHALL request another code only when Telegram supplies a next delivery method and the server-provided timeout has elapsed. An early request SHALL report the remaining wait without issuing a resend RPC; an absent timeout SHALL impose no additional local delay. Without a next method, setup SHALL explain that retry is unavailable and SHALL NOT request another code. Each successful resend SHALL replace the active delivery metadata and code hash; subsequent login SHALL use the newest hash. Setup SHALL NOT force SMS delivery or automatically loop on errors. Telegram rate limits and unsupported responses SHALL terminate the attempt with an actionable error and no false success message.
+At a supported code prompt, setup SHALL accept `resend` as an explicit recovery action. It SHALL request another code only when Telegram supplies a next delivery method and the server-provided timeout has elapsed. An early request SHALL report the remaining wait without issuing a resend RPC; an absent timeout SHALL impose no additional local delay. Without a next method, setup SHALL explain that retry is unavailable and SHALL NOT request another code. Each successful resend SHALL replace the active delivery metadata and code hash; subsequent login SHALL use the newest hash. Setup SHALL NOT force SMS delivery or automatically loop on errors. When Telegram rejects an entered login code as invalid, setup SHALL prompt for the code again using the current code hash without requesting another code; when the 2FA password is incorrect, setup SHALL prompt for the password again. Expired codes and all other failures SHALL still terminate the attempt. Telegram rate limits and unsupported responses SHALL terminate the attempt with an actionable error and no false success message.
 
 Setup SHALL also provide a code-free `setup qr` alternative that renders a QR login token on stderr for confirmation in the phone app's device-scan flow. QR login SHALL require no phone number and SHALL persist the same reusable session with identical permissions and success behavior. An expired token SHALL refresh with a new rendering while setup keeps waiting. A confirmed scan on a 2FA-protected account SHALL request the 2FA password with hidden terminal input and complete authorization the same way as the code flow. QR export or import failures, including rate limits, SHALL terminate the attempt with an actionable error and no session-saved message. All diagnostics SHALL stay on stderr and stdout SHALL remain empty.
 
@@ -136,6 +136,22 @@ Setup SHALL also provide a code-free `setup qr` alternative that renders a QR lo
 
 - **WHEN** Telegram rejects an initial or repeated code request with a rate limit
 - **THEN** setup reports the retry delay when supplied and exits without automatic retries or a session-saved message
+
+#### Scenario: Mistyped login code can be re-entered
+
+- **WHEN** Telegram rejects an entered login code as invalid
+- **THEN** setup reports the rejection and prompts for the code again
+- **AND** it does not request another code, and a correct code then completes login with the same code hash
+
+#### Scenario: Incorrect 2FA password can be re-entered
+
+- **WHEN** Telegram rejects the entered 2FA password
+- **THEN** setup reports the incorrect password and prompts for it again with hidden input
+
+#### Scenario: Expired code terminates setup
+
+- **WHEN** Telegram reports the entered code as expired
+- **THEN** setup exits with an actionable error and no session-saved message
 
 #### Scenario: QR login needs no code or phone
 

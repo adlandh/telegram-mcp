@@ -19,7 +19,7 @@ type Arguments struct {
 	Limit     *int   `json:"limit,omitempty"`
 	SinceID   *int   `json:"sinceId,omitempty"`
 	MessageID int    `json:"messageId,omitempty"`
-	FolderID  int    `json:"folderId,omitzero"`
+	FolderID  int    `json:"folderId,omitempty"`
 	Archived  bool   `json:"archived,omitempty"`
 	MaxMB     *int64 `json:"maxMB,omitempty"`
 }
@@ -158,12 +158,13 @@ func (s *Service) Execute(ctx context.Context, name string, a Arguments) (string
 		}
 		return cmp.Or(strings.Join(lines, "\n"), "(no folders defined)"), nil
 	case "download_media", "get_thumbnail":
-		capMB := s.maxDownloadMB
-		if a.MaxMB != nil {
-			capMB = *a.MaxMB
-		}
-		if capMB < 0 || capMB > (1<<63-1)/(1024*1024) {
+		if a.MaxMB != nil && (*a.MaxMB < 0 || *a.MaxMB > (1<<63-1)/(1024*1024)) {
 			return "", fmt.Errorf("maxMB must be non-negative and fit into int64 bytes")
+		}
+		// The configured limit is a ceiling: callers may only lower it; 0 keeps it.
+		capMB := s.maxDownloadMB
+		if a.MaxMB != nil && *a.MaxMB > 0 && (capMB == 0 || *a.MaxMB < capMB) {
+			capMB = *a.MaxMB
 		}
 		file, err := s.telegram.Download(ctx, a.GroupURL, a.MessageID, name == "get_thumbnail", capMB*1024*1024)
 		if err != nil {
@@ -189,6 +190,8 @@ func formatDialogs(chats []domain.Chat) string {
 	return strings.Join(lines, "\n")
 }
 
+var continuation = strings.NewReplacer("\r\n", "\n  ", "\n", "\n  ", "\r", "\n  ")
+
 func formatMessage(m domain.Message) string {
 	media, reply, album := "", "", ""
 	if m.Media.Type != "" && m.Media.Type != "none" {
@@ -200,5 +203,7 @@ func formatMessage(m domain.Message) string {
 	if m.AlbumID != "" {
 		album = " [album:" + m.AlbumID + "]"
 	}
-	return fmt.Sprintf("#%d [%s] %s:%s %s%s%s", m.ID, m.Date.UTC().Format("2006-01-02 15:04:05"), cmp.Or(m.Sender, "Unknown"), media, cmp.Or(m.Text, "[no text]"), reply, album)
+	// Indent continuation lines so message text cannot fake another "#id" line.
+	text := continuation.Replace(cmp.Or(m.Text, "[no text]"))
+	return fmt.Sprintf("#%d [%s] %s:%s %s%s%s", m.ID, m.Date.UTC().Format("2006-01-02 15:04:05"), cmp.Or(m.Sender, "Unknown"), media, text, reply, album)
 }

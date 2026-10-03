@@ -49,7 +49,7 @@ func setupLogin(ctx context.Context, client setupClient, phone string, read setu
 			return ctxErr
 		}
 		if errors.Is(err, auth.ErrPasswordAuthNeeded) || tgerr.Is(err, "SESSION_PASSWORD_NEEDED") {
-			return setupPassword(ctx, client, read)
+			return setupPassword(ctx, client, read, out)
 		}
 		if err != nil {
 			return loginError(stage, err)
@@ -84,7 +84,15 @@ func setupLogin(ctx context.Context, client setupClient, phone string, read setu
 			}
 			_, err = client.SignIn(ctx, phone, code, sent.PhoneCodeHash)
 			if errors.Is(err, auth.ErrPasswordAuthNeeded) || tgerr.Is(err, "SESSION_PASSWORD_NEEDED") {
-				return setupPassword(ctx, client, read)
+				return setupPassword(ctx, client, read, out)
+			}
+			if tgerr.Is(err, "PHONE_CODE_INVALID") {
+				// A typo must not cost a new code: re-prompt with the same hash.
+				if _, err := fmt.Fprintln(out, "Telegram rejected the code (PHONE_CODE_INVALID); enter it again."); err != nil {
+					return loginError("display retry instructions", err)
+				}
+				response, err = sent, nil
+				continue
 			}
 			return loginError("sign in", err)
 		default:
@@ -181,7 +189,7 @@ func setupQR(ctx context.Context, qr qrClient, passwords qrPasswordClient, logge
 		return err
 	}
 	if errors.Is(err, auth.ErrPasswordAuthNeeded) || tgerr.Is(err, "SESSION_PASSWORD_NEEDED") {
-		return setupPassword(ctx, passwords, read)
+		return setupPassword(ctx, passwords, read, out)
 	}
 	// QR failures carry no secrets (no phone or code involved): surface Telegram's
 	// exact rejection instead of the generic message so the next step is actionable.
@@ -194,19 +202,26 @@ func setupQR(ctx context.Context, qr qrClient, passwords qrPasswordClient, logge
 	return loginError("complete QR authorization", err)
 }
 
-func setupPassword(ctx context.Context, client qrPasswordClient, read setupPrompt) error {
-	if err := ctx.Err(); err != nil {
-		return err
+func setupPassword(ctx context.Context, client qrPasswordClient, read setupPrompt, out io.Writer) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		password, err := read(ctx, "Telegram 2FA password: ", false)
+		if err != nil {
+			return loginError("read 2FA password", err)
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		_, err = client.Password(ctx, password)
+		if !errors.Is(err, auth.ErrPasswordInvalid) {
+			return loginError("verify 2FA password", err)
+		}
+		if _, err := fmt.Fprintln(out, "Incorrect 2FA password; try again."); err != nil {
+			return loginError("display retry instructions", err)
+		}
 	}
-	password, err := read(ctx, "Telegram 2FA password: ", false)
-	if err != nil {
-		return loginError("read 2FA password", err)
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	_, err = client.Password(ctx, password)
-	return loginError("verify 2FA password", err)
 }
 
 func codeDelivery(kind tg.AuthSentCodeTypeClass) (string, error) {

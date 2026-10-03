@@ -5,8 +5,10 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/adlandh/telegram-mcp/internal/domain"
 	"github.com/adlandh/telegram-mcp/internal/port"
@@ -17,15 +19,16 @@ import (
 )
 
 type Client struct {
-	client      *gotd.Client
 	api         *tg.Client
 	downloadDir string
+	mu          sync.Mutex
+	peers       map[string]resolved // ponytail: never invalidated; restart clears it
 }
 
 var _ port.Telegram = (*Client)(nil)
 
 func New(client *gotd.Client, downloadDir string) *Client {
-	return &Client{client: client, api: client.API(), downloadDir: downloadDir}
+	return &Client{api: client.API(), downloadDir: downloadDir}
 }
 
 type resolved struct {
@@ -36,9 +39,15 @@ type resolved struct {
 
 func normalize(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
+	lower := strings.ToLower(raw)
+	for _, prefix := range []string{"t.me/", "www.t.me/", "telegram.me/", "www.telegram.me/"} {
+		if strings.HasPrefix(lower, prefix) {
+			raw = "https://" + raw
+		}
+	}
 	if strings.Contains(raw, "://") {
 		u, err := url.Parse(raw)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host != "t.me" {
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || !slices.Contains([]string{"t.me", "telegram.me"}, strings.TrimPrefix(strings.ToLower(u.Host), "www.")) {
 			return "", fmt.Errorf("expected a t.me URL, username, or numeric ID")
 		}
 		parts := strings.Split(strings.Trim(u.Path, "/"), "/")
@@ -68,7 +77,9 @@ func (c *Client) resolve(ctx context.Context, raw string) (resolved, error) {
 	}
 	if id, err := strconv.ParseInt(name, 10, 64); err == nil {
 		// Numeric peers need an access hash, including after restart.
-		// ponytail: scan dialogs on each numeric lookup; cache peers if this becomes slow.
+		if r, ok := c.cached(name); ok {
+			return r, nil
+		}
 		var fallback *resolved
 		for _, folder := range []int{0, 1} {
 			iter := query.GetDialogs(c.api).FolderID(folder).BatchSize(100).Iter()
@@ -80,6 +91,7 @@ func (c *Client) resolve(ctx context.Context, raw string) (resolved, error) {
 				}
 				r := describe(d.Peer, e.Entities)
 				r.input = e.Peer
+				c.store(r.info.ID, r)
 				if r.info.ID == name {
 					return r, nil
 				}
@@ -92,6 +104,7 @@ func (c *Client) resolve(ctx context.Context, raw string) (resolved, error) {
 			}
 		}
 		if fallback != nil {
+			c.store(name, *fallback)
 			return *fallback, nil
 		}
 		return resolved{}, fmt.Errorf("chat ID not found in account dialogs; use list_dialogs or a username")
@@ -104,6 +117,22 @@ func (c *Client) resolve(ctx context.Context, raw string) (resolved, error) {
 	info := describe(r.Peer, entities)
 	info.input, err = entities.ExtractPeer(r.Peer)
 	return info, err
+}
+
+func (c *Client) cached(key string) (resolved, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	r, ok := c.peers[key]
+	return r, ok
+}
+
+func (c *Client) store(key string, r resolved) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.peers == nil {
+		c.peers = map[string]resolved{}
+	}
+	c.peers[key] = r
 }
 
 func describe(p tg.PeerClass, entities peer.Entities) resolved {
@@ -163,9 +192,9 @@ func (c *Client) Folders(ctx context.Context) ([]domain.Folder, error) {
 	for _, f := range r.Filters {
 		switch f := f.(type) {
 		case *tg.DialogFilter:
-			result = append(result, domain.Folder{ID: f.ID, Title: f.Title.Text, Count: len(f.IncludePeers)})
+			result = append(result, domain.Folder{ID: f.ID, Title: f.Title.Text, Count: len(f.PinnedPeers) + len(f.IncludePeers)})
 		case *tg.DialogFilterChatlist:
-			result = append(result, domain.Folder{ID: f.ID, Title: f.Title.Text, Count: len(f.IncludePeers)})
+			result = append(result, domain.Folder{ID: f.ID, Title: f.Title.Text, Count: len(f.PinnedPeers) + len(f.IncludePeers)})
 		}
 	}
 	return result, nil
