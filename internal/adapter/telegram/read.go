@@ -25,20 +25,20 @@ func (c *Client) MarkRead(ctx context.Context, chat string, messageID int) (stri
 				messageID, unreadMark = d.TopMessage, d.UnreadMark
 			}
 		}
-		if messageID == 0 {
-			return r.info.ID, 0, nil
+	}
+	// An empty chat has no history to acknowledge, but may still carry a manual unread mark.
+	if messageID > 0 {
+		switch p := r.input.(type) {
+		case *tg.InputPeerChannel:
+			_, err = c.api.ChannelsReadHistory(ctx, &tg.ChannelsReadHistoryRequest{Channel: &tg.InputChannel{ChannelID: p.ChannelID, AccessHash: p.AccessHash}, MaxID: messageID})
+		case *tg.InputPeerUser, *tg.InputPeerChat, *tg.InputPeerSelf:
+			_, err = c.api.MessagesReadHistory(ctx, &tg.MessagesReadHistoryRequest{Peer: p, MaxID: messageID})
+		default:
+			return "", 0, fmt.Errorf("unsupported chat type %T", p)
 		}
-	}
-	switch p := r.input.(type) {
-	case *tg.InputPeerChannel:
-		_, err = c.api.ChannelsReadHistory(ctx, &tg.ChannelsReadHistoryRequest{Channel: &tg.InputChannel{ChannelID: p.ChannelID, AccessHash: p.AccessHash}, MaxID: messageID})
-	case *tg.InputPeerUser, *tg.InputPeerChat, *tg.InputPeerSelf:
-		_, err = c.api.MessagesReadHistory(ctx, &tg.MessagesReadHistoryRequest{Peer: p, MaxID: messageID})
-	default:
-		return "", 0, fmt.Errorf("unsupported chat type %T", p)
-	}
-	if err != nil {
-		return "", 0, fmt.Errorf("read history: %w", err)
+		if err != nil {
+			return "", 0, fmt.Errorf("read history: %w", err)
+		}
 	}
 	if unreadMark {
 		if _, err := c.api.MessagesMarkDialogUnread(ctx, &tg.MessagesMarkDialogUnreadRequest{Peer: &tg.InputDialogPeer{Peer: r.input}}); err != nil {

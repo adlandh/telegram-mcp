@@ -61,6 +61,7 @@ func TestMarkRead(t *testing.T) {
 		{"whole chat clears unread mark", &tg.InputPeerChat{ChatID: 5}, &tg.Dialog{TopMessage: 42, UnreadMark: true}, 0, 42, []string{"dialogs", "messages:42", "unmark"}},
 		{"whole chat keeps absent mark", &tg.InputPeerChannel{ChannelID: 5, AccessHash: 99}, &tg.Dialog{TopMessage: 42}, 0, 42, []string{"dialogs", "channel:5:99:42"}},
 		{"empty chat", &tg.InputPeerChat{ChatID: 5}, &tg.Dialog{}, 0, 0, []string{"dialogs"}},
+		{"empty chat clears unread mark", &tg.InputPeerChat{ChatID: 5}, &tg.Dialog{UnreadMark: true}, 0, 0, []string{"dialogs", "unmark"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, calls := markReadClient(t, tc.input, tc.dialog, "")
