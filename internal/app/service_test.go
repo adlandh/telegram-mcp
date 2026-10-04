@@ -22,6 +22,17 @@ type fakeTelegram struct {
 	limit       int
 	folderChats []domain.Chat
 	folderErr   error
+	markChat    string
+	markID      int
+	markCalls   int
+	markUpTo    int
+	markErr     error
+}
+
+func (f *fakeTelegram) MarkRead(_ context.Context, chat string, messageID int) (string, int, error) {
+	f.markCalls++
+	f.markChat, f.markID = chat, messageID
+	return "-5", f.markUpTo, f.markErr
 }
 
 func (f *fakeTelegram) Folders(context.Context) ([]domain.Folder, error) { return f.folders, nil }
@@ -163,5 +174,45 @@ func TestMultilineTextCannotFakeMessages(t *testing.T) {
 		if strings.HasPrefix(line, "#") {
 			t.Fatalf("fake message line: %q", line)
 		}
+	}
+}
+
+func TestMarkRead(t *testing.T) {
+	for _, tc := range []struct {
+		args      Arguments
+		upTo      int
+		markErr   error
+		want      string
+		wantErr   bool
+		wantCalls int
+	}{
+		{args: Arguments{MessageID: 1}, wantErr: true},
+		{args: Arguments{GroupURL: " ", MessageID: 1}, wantErr: true},
+		{args: Arguments{GroupURL: "@x", MessageID: -1}, wantErr: true},
+		{args: Arguments{GroupURL: "@x", MessageID: 1 << 31}, wantErr: true},
+		{args: Arguments{GroupURL: "@x", MessageID: 12}, upTo: 12, want: "Marked as read up to message #12 [id:-5]", wantCalls: 1},
+		{args: Arguments{GroupURL: "@x"}, upTo: 42, want: "Marked as read up to message #42 [id:-5]", wantCalls: 1},
+		{args: Arguments{GroupURL: "@x"}, want: "(no messages to mark as read) [id:-5]", wantCalls: 1},
+		{args: Arguments{GroupURL: "@x"}, markErr: errors.New("boom"), wantErr: true, wantCalls: 1},
+	} {
+		f := &fakeTelegram{markUpTo: tc.upTo, markErr: tc.markErr}
+		text, err := New(f, 200, time.Minute).Execute(t.Context(), "mark_read", tc.args)
+		if (err != nil) != tc.wantErr || text != tc.want || f.markCalls != tc.wantCalls {
+			t.Errorf("%+v: %q, %v, %d calls", tc.args, text, err, f.markCalls)
+		}
+		if tc.wantCalls == 1 && (f.markChat != "@x" || f.markID != tc.args.MessageID) {
+			t.Errorf("%+v: passed %q %d", tc.args, f.markChat, f.markID)
+		}
+	}
+}
+
+func TestOtherToolsDoNotMarkRead(t *testing.T) {
+	f := &fakeTelegram{}
+	s := New(f, 200, time.Minute)
+	for _, name := range []string{"read_messages", "search_messages", "fetch_since", "get_pinned", "global_search", "list_folders", "list_folder_dialogs", "download_media", "get_thumbnail"} {
+		_, _ = s.Execute(t.Context(), name, Arguments{GroupURL: "@x", Query: "q", SinceID: new(0), MessageID: 1, FolderID: 2})
+	}
+	if f.markCalls != 0 {
+		t.Fatalf("read tools called MarkRead %d times", f.markCalls)
 	}
 }

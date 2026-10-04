@@ -100,6 +100,7 @@ Only the API ID and hash come from Telegram's developer portal; the phone number
 | `get_media_info` | `groupUrl`, `messageId` | — |
 | `download_media` | `groupUrl`, `messageId` | `maxMB`: lowers the configured limit; `0` or omitted uses it |
 | `get_thumbnail` | `groupUrl`, `messageId` | — |
+| `mark_read` | `groupUrl` | `messageId`: marks up to and including it; omitted marks the whole chat |
 
 `groupUrl` accepts `@username`, a name without `@`, a `https://t.me/name` URL, a message link, or a numeric **ID as a string** from `list_dialogs`. `https://t.me/c/...` links are supported for private channels. Invite links are not used: the service never joins chats. Numeric IDs are resolved through the account's dialogs, including archived dialogs.
 
@@ -111,7 +112,9 @@ Existing tool and parameter names match the original; result text is not a byte-
 
 `fetch_since` returns the earliest messages after `sinceId` and a `maxId` for the next call. Pass the returned `maxId` to the next request until the result is empty. A large backlog is not skipped when `limit` is reached.
 
-Media is downloaded as a stream, with checks for both declared size and bytes actually written. `get_thumbnail` selects a preview no larger than 320 pixels per side or an embedded thumbnail without downloading the original. Repeated downloads create separate files with `0600` permissions; incomplete files are removed on failure. Media from chats that prohibit saving (`no-forward`) is not downloaded. These two tools are marked in MCP as writing local files; all others are read-only. Sending messages, editing messages, and read acknowledgements are not supported.
+Media is downloaded as a stream, with checks for both declared size and bytes actually written. `get_thumbnail` selects a preview no larger than 320 pixels per side or an embedded thumbnail without downloading the original. Repeated downloads create separate files with `0600` permissions; incomplete files are removed on failure. Media from chats that prohibit saving (`no-forward`) is not downloaded. These two tools are marked in MCP as writing local files. Sending and editing messages are not supported.
+
+`mark_read` is the only tool that changes Telegram account state, and no other tool marks messages as read. Telegram stores read state as a per-chat cursor, so `messageId` marks every message up to and including it; individual messages cannot be marked in isolation. Without `messageId` the whole chat is marked read up to its latest message, and a manual "marked as unread" flag is cleared. Unread mention and reaction badges and forum topic read state are not changed. The tool is advertised as not read-only and idempotent.
 
 ## Architecture
 

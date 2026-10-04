@@ -28,8 +28,8 @@ Run from the repository root with Go 1.26+ and golangci-lint v2:
 ## Boundaries and behavior
 
 - This is a personal-account MTProto client using gotd/td and the official Go MCP SDK, not a Bot API service.
-- Telegram tools are read-only. Never add sends, edits, joins or read acknowledgements as incidental behavior.
-- `download_media` and `get_thumbnail` write local files and must retain their non-read-only MCP annotations.
+- Telegram tools are read-only except the explicit `mark_read` tool. Never add sends, edits, joins or read acknowledgements as incidental behavior.
+- `download_media` and `get_thumbnail` write local files and `mark_read` changes Telegram read state; all three must retain their non-read-only MCP annotations.
 - Preserve tool/parameter names, including camelCase keys such as `groupUrl` and `sinceId`. Numeric chat IDs are strings; numeric parameters are integers.
 - `archived=true` selects only archived dialogs, not main plus archived.
 - `fetch_since` must return the earliest messages after `sinceId` with a safe `maxId` cursor; do not skip backlog when the limit is reached.

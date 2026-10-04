@@ -1,4 +1,4 @@
-// Package telegram implements the read-only application port using MTProto.
+// Package telegram implements the application port using MTProto.
 package telegram
 
 import (

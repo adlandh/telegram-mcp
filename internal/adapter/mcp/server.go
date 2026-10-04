@@ -31,6 +31,7 @@ func New(service Executor) *mcp.Server {
 		{"get_media_info", "Inspect media without downloading it.", []string{"groupUrl", "messageId"}, nil},
 		{"download_media", "Download media to a local file. maxMB can only lower the configured limit; 0 or omitted uses it.", []string{"groupUrl", "messageId"}, []string{"maxMB"}},
 		{"get_thumbnail", "Download only a media preview to a local file.", []string{"groupUrl", "messageId"}, nil},
+		{"mark_read", "Mark messages as read in Telegram (changes account state). Telegram tracks a read cursor, so messageId marks every message up to and including it; omit it to mark the whole chat read.", []string{"groupUrl"}, []string{"messageId"}},
 	} {
 		properties := map[string]any{}
 		for _, key := range append(append([]string{}, def.required...), def.optional...) {
@@ -54,9 +55,9 @@ func New(service Executor) *mcp.Server {
 		if len(def.required) > 0 {
 			schema["required"] = def.required
 		}
-		writesFile := def.name == "download_media" || def.name == "get_thumbnail"
+		readOnly := def.name != "download_media" && def.name != "get_thumbnail" && def.name != "mark_read"
 		mcp.AddTool(server, &mcp.Tool{Name: def.name, Description: def.description, InputSchema: schema,
-			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: !writesFile, DestructiveHint: new(false), OpenWorldHint: new(true)}},
+			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly, IdempotentHint: def.name == "mark_read", DestructiveHint: new(false), OpenWorldHint: new(true)}},
 			func(ctx context.Context, _ *mcp.CallToolRequest, args app.Arguments) (*mcp.CallToolResult, any, error) {
 				text, err := service.Execute(ctx, def.name, args)
 				if err != nil {

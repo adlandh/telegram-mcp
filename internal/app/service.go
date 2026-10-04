@@ -40,7 +40,7 @@ func (s *Service) Execute(ctx context.Context, name string, a Arguments) (string
 	a.GroupURL, a.Query = strings.TrimSpace(a.GroupURL), strings.TrimSpace(a.Query)
 	switch name {
 	case "global_search", "list_dialogs", "list_folders", "list_folder_dialogs":
-	case "read_messages", "search_messages", "get_group_info", "fetch_since", "get_message", "get_pinned", "get_media_info", "download_media", "get_thumbnail":
+	case "read_messages", "search_messages", "get_group_info", "fetch_since", "get_message", "get_pinned", "get_media_info", "download_media", "get_thumbnail", "mark_read":
 		if a.GroupURL == "" {
 			return "", fmt.Errorf("groupUrl is required")
 		}
@@ -62,6 +62,11 @@ func (s *Service) Execute(ctx context.Context, name string, a Arguments) (string
 	switch name {
 	case "get_message", "get_media_info", "download_media", "get_thumbnail":
 		if a.MessageID <= 0 || a.MessageID > 1<<31-1 {
+			return "", fmt.Errorf("messageId must be a positive 32-bit integer")
+		}
+	case "mark_read":
+		// 0 means messageId was omitted: mark the whole chat.
+		if a.MessageID < 0 || a.MessageID > 1<<31-1 {
 			return "", fmt.Errorf("messageId must be a positive 32-bit integer")
 		}
 	}
@@ -157,6 +162,15 @@ func (s *Service) Execute(ctx context.Context, name string, a Arguments) (string
 			lines = append(lines, fmt.Sprintf("%s — %d explicitly included chats [folderId:%d]", f.Title, f.Count, f.ID))
 		}
 		return cmp.Or(strings.Join(lines, "\n"), "(no folders defined)"), nil
+	case "mark_read":
+		chatID, upTo, err := s.telegram.MarkRead(ctx, a.GroupURL, a.MessageID)
+		if err != nil {
+			return "", err
+		}
+		if upTo == 0 {
+			return fmt.Sprintf("(no messages to mark as read) [id:%s]", chatID), nil
+		}
+		return fmt.Sprintf("Marked as read up to message #%d [id:%s]", upTo, chatID), nil
 	case "download_media", "get_thumbnail":
 		if a.MaxMB != nil && (*a.MaxMB < 0 || *a.MaxMB > (1<<63-1)/(1024*1024)) {
 			return "", fmt.Errorf("maxMB must be non-negative and fit into int64 bytes")

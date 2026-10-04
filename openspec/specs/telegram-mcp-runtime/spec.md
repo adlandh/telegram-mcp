@@ -25,12 +25,14 @@ The server SHALL expose exactly the following tools and parameter names. Success
 | get_media_info | groupUrl, messageId | none |
 | download_media | groupUrl, messageId | maxMB |
 | get_thumbnail | groupUrl, messageId | none |
+| mark_read | groupUrl | messageId |
 
 #### Scenario: Discover tools
 
 - **WHEN** an MCP client initializes and requests the tool list
-- **THEN** it receives the 13 tools and their input schemas
-- **AND** only `download_media` and `get_thumbnail` advertise `readOnlyHint=false`, while all tools advertise `destructiveHint=false`
+- **THEN** it receives the 14 tools and their input schemas
+- **AND** only `download_media`, `get_thumbnail` and `mark_read` advertise `readOnlyHint=false`, while all tools advertise `destructiveHint=false`
+- **AND** `mark_read` advertises `idempotentHint=true`
 
 #### Scenario: Telegram request fails
 
@@ -39,7 +41,7 @@ The server SHALL expose exactly the following tools and parameter names. Success
 
 ### Requirement: Validate tool arguments
 
-The server SHALL reject unknown properties, missing required parameters, incorrect types, non-integer numeric inputs, non-positive limits, and blank required chat identifiers or search queries. `messageId` SHALL be in `[1, 2147483647]`, `sinceId` in `[0, 2147483646]`, and `maxMB` SHALL be non-negative and representable as signed 64-bit bytes after multiplication by 1048576. `list_folder_dialogs` SHALL require integer `folderId` in `[2, 2147483647]`; IDs 0 and 1 SHALL remain main/archive selectors for the existing `list_dialogs` behavior, not custom folder IDs.
+The server SHALL reject unknown properties, missing required parameters, incorrect types, non-integer numeric inputs, non-positive limits, and blank required chat identifiers or search queries. `messageId` SHALL be in `[1, 2147483647]` whenever supplied, including the optional `messageId` of `mark_read`, `sinceId` in `[0, 2147483646]`, and `maxMB` SHALL be non-negative and representable as signed 64-bit bytes after multiplication by 1048576. `list_folder_dialogs` SHALL require integer `folderId` in `[2, 2147483647]`; IDs 0 and 1 SHALL remain main/archive selectors for the existing `list_dialogs` behavior, not custom folder IDs.
 
 #### Scenario: Invalid arguments do not reach Telegram
 
@@ -60,6 +62,11 @@ The server SHALL reject unknown properties, missing required parameters, incorre
 
 - **WHEN** a caller supplies `folderId=2` and `limit=50` to `list_folder_dialogs`
 - **THEN** the tool passes those integer values to the application and returns text or an MCP tool error
+
+#### Scenario: Invalid mark_read arguments do not change read state
+
+- **WHEN** a caller invokes `mark_read` with a blank `groupUrl`, `messageId=0`, a fractional `messageId`, or `messageId` above 2147483647
+- **THEN** the request fails validation before calling Telegram
 
 ### Requirement: Environment-only configuration
 
@@ -183,7 +190,7 @@ Setup SHALL also provide a code-free `setup qr` alternative that renders a QR lo
 
 ### Requirement: Stdio isolation and read-only account access
 
-Normal invocation SHALL serve MCP over stdin/stdout. Diagnostics and setup prompts SHALL go to stderr. Help SHALL succeed without credentials. Tools SHALL NOT send, edit, delete, join chats, or acknowledge messages as read. Each tool call SHALL receive the configured request deadline and propagate cancellation to external operations; normal serving SHALL respond to process termination signals by canceling its lifecycle.
+Normal invocation SHALL serve MCP over stdin/stdout. Diagnostics and setup prompts SHALL go to stderr. Help SHALL succeed without credentials. Tools SHALL NOT send, edit, delete, or join chats. No tool other than `mark_read` SHALL acknowledge messages as read. Each tool call SHALL receive the configured request deadline and propagate cancellation to external operations; normal serving SHALL respond to process termination signals by canceling its lifecycle.
 
 #### Scenario: Help and startup errors keep stdout clean
 
@@ -194,3 +201,8 @@ Normal invocation SHALL serve MCP over stdin/stdout. Diagnostics and setup promp
 
 - **WHEN** a tool request exceeds its configured deadline or its MCP request is cancelled
 - **THEN** the Telegram operation receives cancellation and the tool returns an error
+
+#### Scenario: Read acknowledgement requires the explicit tool
+
+- **WHEN** a caller reads, searches, polls or downloads messages
+- **THEN** Telegram read state is unchanged unless the caller separately invokes `mark_read`
