@@ -124,3 +124,42 @@ func TestHTTPHandlerShutdownCancelsAndDrainsCalls(t *testing.T) {
 		t.Fatalf("cancelled=%v cleaned=%v: shutdown must cancel and drain in-flight calls", cancelled.Load(), cleaned.Load())
 	}
 }
+
+func TestHTTPHandlerRejectsCallsAfterWait(t *testing.T) {
+	const token = "0123456789abcdef0123456789abcdef"
+	life, stop := context.WithCancel(t.Context())
+	var running, finished atomic.Int32
+	handler, wait := HTTPHandler(life, New(executorFunc(func(ctx context.Context, name string, _ app.Arguments) (string, error) {
+		running.Add(1)
+		defer finished.Add(1)
+		<-ctx.Done()
+		return "", ctx.Err()
+	})), token)
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil).Connect(t.Context(),
+		&mcp.StreamableClientTransport{Endpoint: srv.URL + "/mcp", HTTPClient: &http.Client{Transport: bearer{token}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cs.Close() })
+	call := func() (*mcp.CallToolResult, error) {
+		return cs.CallTool(context.WithoutCancel(t.Context()), &mcp.CallToolParams{Name: "list_folders", Arguments: map[string]any{}})
+	}
+	// Requests racing with shutdown must either be drained by wait or rejected, never both missed.
+	for range 20 {
+		go func() { _, _ = call() }()
+	}
+	stop()
+	wait()
+	if running.Load() != finished.Load() {
+		t.Fatalf("wait returned with %d of %d accepted calls still running", running.Load()-finished.Load(), running.Load())
+	}
+	before := running.Load()
+	if r, err := call(); err == nil && !r.IsError {
+		t.Fatal("call after wait succeeded")
+	}
+	if running.Load() != before {
+		t.Fatal("call after wait reached the executor")
+	}
+}

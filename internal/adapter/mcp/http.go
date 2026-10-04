@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"errors"
 	"net/http"
 	"sync"
 	"time"
@@ -14,14 +15,27 @@ import (
 
 // HTTPHandler serves server at /mcp for requests carrying the static bearer token.
 // TLS is expected to be terminated by a reverse proxy on the same host.
-// MCP requests are cancelled when ctx ends; the returned wait blocks until they have returned.
+// MCP requests are cancelled when ctx ends; the returned wait rejects further requests
+// and blocks until the accepted ones have returned.
 func HTTPHandler(ctx context.Context, server *mcp.Server, token string) (http.Handler, func()) {
-	var calls sync.WaitGroup
+	var (
+		mu     sync.Mutex
+		closed bool
+		calls  sync.WaitGroup
+	)
 	// The SDK detaches stateful-session handlers from HTTP request contexts,
 	// so link them to the process lifecycle explicitly.
 	server.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(rctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			// The SDK dispatches asynchronously, so a request can arrive after wait started;
+			// reject it instead of racing Add against Wait.
+			mu.Lock()
+			if closed {
+				mu.Unlock()
+				return nil, errShuttingDown
+			}
 			calls.Add(1)
+			mu.Unlock()
 			defer calls.Done()
 			rctx, cancel := context.WithCancel(rctx)
 			defer cancel()
@@ -42,5 +56,12 @@ func HTTPHandler(ctx context.Context, server *mcp.Server, token string) (http.Ha
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", http.NewCrossOriginProtection().Handler(
 		auth.RequireBearerToken(verify, &auth.RequireBearerTokenOptions{AllowMissingExpiration: true})(streamable)))
-	return mux, calls.Wait
+	return mux, func() {
+		mu.Lock()
+		closed = true
+		mu.Unlock()
+		calls.Wait()
+	}
 }
+
+var errShuttingDown = errors.New("server is shutting down")
