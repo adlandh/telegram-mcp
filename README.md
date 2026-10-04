@@ -2,7 +2,7 @@
 
 A Go implementation of [22syn/telegram-user-mcp](https://github.com/22syn/telegram-user-mcp) with hexagonal architecture and environment-variable configuration.
 
-The service connects to a **personal Telegram account over MTProto** and exposes 12 MCP tools over stdio. Personal conversations, groups, and channels visible to the account are available. It does not use the Bot API or a bot token.
+The service connects to a **personal Telegram account over MTProto** and exposes 14 MCP tools over stdio or, with `telegram-mcp http`, over authenticated HTTP. Personal conversations, groups, and channels visible to the account are available. It does not use the Bot API or a bot token.
 
 ## Getting started
 
@@ -67,6 +67,130 @@ Go 1.26+ and an existing Telegram account are required.
 
 Without arguments, the executable starts the MCP server. stdout contains protocol output only; errors and authorization prompts go to stderr. `--help` works without credentials. Use one server process per session.
 
+## HTTP access
+
+`telegram-mcp http` serves MCP over the Streamable HTTP transport at `http://TELEGRAM_MCP_HTTP_ADDR/mcp` instead of stdio. Run `setup` first; the same session is used.
+
+```sh
+export TELEGRAM_MCP_HTTP_TOKEN="$(openssl rand -hex 32)"   # keep it; clients need it
+./bin/telegram-mcp http
+# serving MCP on http://127.0.0.1:8080/mcp
+```
+
+- Every request must carry `Authorization: Bearer <TELEGRAM_MCP_HTTP_TOKEN>`; others get `401`. The token grants full access to the tools, including `mark_read` and downloads, so treat it like the session file.
+- The server speaks plain HTTP and only listens on loopback (`127.0.0.1`, `[::1]`, `localhost`); `0.0.0.0` or `:8080` is refused. Publish it over HTTPS through a reverse proxy on the same host.
+- `download_media` and `get_thumbnail` write files on the server host, not on the remote client.
+- Run it under a process manager, for example a systemd unit with `ExecStart=/path/to/bin/telegram-mcp http` and the variables in `EnvironmentFile=`. SIGTERM stops it cleanly.
+
+Caddy example (TLS certificates are obtained automatically):
+
+```caddyfile
+tg.example.com {
+    reverse_proxy 127.0.0.1:8080 {
+        header_up Host {upstream_hostport}
+    }
+}
+```
+
+`header_up Host` is required: the server rejects requests that reach its loopback listener with a public `Host` header (DNS-rebinding protection). Without it every request fails with `403 Forbidden: invalid Host header`.
+
+See [Client setup](#client-setup) for Claude, ChatGPT/Codex and Hermes.
+
+## Client setup
+
+Every client can run the server in one of two ways:
+
+- **Local (stdio):** the client starts `bin/telegram-mcp` itself as a child process on the same machine. You don't need a token or a proxy. The client runs as the OS user that ran `setup`.
+- **Remote (HTTP):** you run `telegram-mcp http` behind Caddy (see [HTTP access](#http-access)). The client connects to `https://tg.example.com/mcp` with `Authorization: Bearer <token>`.
+
+In the examples below, replace the paths, the API ID and hash, the domain and the token with your own values. Do not commit files that contain them.
+
+### Claude Code
+
+Local:
+
+```sh
+claude mcp add telegram -s user \
+  -e TELEGRAM_API_ID=123456 -e TELEGRAM_API_HASH=your_32_character_api_hash \
+  -- /absolute/path/to/telegram-mcp/bin/telegram-mcp
+```
+
+Remote:
+
+```sh
+claude mcp add telegram -s user --transport http https://tg.example.com/mcp \
+  --header "Authorization: Bearer $TELEGRAM_MCP_HTTP_TOKEN"
+```
+
+Run `/mcp` inside Claude Code to check the connection.
+
+### Claude Desktop and claude.ai
+
+Local: open **Settings → Developer → Edit Config** in Claude Desktop, add the server to `claude_desktop_config.json`, and restart the app:
+
+```json
+{
+  "mcpServers": {
+    "telegram": {
+      "command": "/absolute/path/to/telegram-mcp/bin/telegram-mcp",
+      "env": {
+        "TELEGRAM_API_ID": "123456",
+        "TELEGRAM_API_HASH": "your_32_character_api_hash"
+      }
+    }
+  }
+}
+```
+
+Remote: go to **Customize → Connectors → Add custom connector** and enter `https://tg.example.com/mcp`. Set authentication to **No sign-in**. Under **Request headers**, add `authorization` with the value `Bearer <token>`, and include the `Bearer ` prefix. Claude connects from Anthropic's cloud, so the URL must be reachable from the internet. At the time of writing, request headers are in beta and only some accounts have them ([docs](https://claude.com/docs/connectors/custom/add-unlisted#authenticate-with-request-headers)). If the dialog has no **Request headers** section, use the local setup or Claude Code. Do not expose the server without a token.
+
+### ChatGPT and Codex
+
+The ChatGPT app (developer-mode connectors) only supports remote servers with OAuth or no authentication. It cannot send a static bearer token and cannot start local processes, so it can't use this server. Use the OpenAI Codex CLI or IDE extension instead. Add one of these to `~/.codex/config.toml`.
+
+Local:
+
+```toml
+[mcp_servers.telegram]
+command = "/absolute/path/to/telegram-mcp/bin/telegram-mcp"
+env = { TELEGRAM_API_ID = "123456", TELEGRAM_API_HASH = "your_32_character_api_hash" }
+```
+
+Remote (the token is read from the environment variable named here, not stored in the file):
+
+```toml
+[mcp_servers.telegram]
+url = "https://tg.example.com/mcp"
+bearer_token_env_var = "TELEGRAM_MCP_HTTP_TOKEN"
+```
+
+Run `/mcp` inside Codex to check the connection.
+
+### Hermes Agent
+
+Add one of these to `~/.hermes/config.yaml`, then run `/reload-mcp`. `${VAR}` placeholders are filled in from the environment.
+
+Local:
+
+```yaml
+mcp_servers:
+  telegram:
+    command: "/absolute/path/to/telegram-mcp/bin/telegram-mcp"
+    env:
+      TELEGRAM_API_ID: "123456"
+      TELEGRAM_API_HASH: "your_32_character_api_hash"
+```
+
+Remote:
+
+```yaml
+mcp_servers:
+  telegram:
+    url: "https://tg.example.com/mcp"
+    headers:
+      Authorization: "Bearer ${TELEGRAM_MCP_HTTP_TOKEN}"
+```
+
 ## Configuration
 
 Only the API ID and hash come from Telegram's developer portal; the phone number belongs to your account. Optional paths, download limits, and timeouts are local settings you choose, and their defaults can be left unchanged.
@@ -80,8 +204,10 @@ Only the API ID and hash come from Telegram's developer portal; the phone number
 | `TELEGRAM_DOWNLOAD_DIR` | `~/.telegram-mcp/downloads` | Directory for downloaded files |
 | `TELEGRAM_MAX_DOWNLOAD_MB` | `200` | Download limit in MiB and ceiling for `maxMB`; `0` disables the limit |
 | `TELEGRAM_REQUEST_TIMEOUT` | `5m` | Total timeout for a tool call, including downloads |
+| `TELEGRAM_MCP_HTTP_ADDR` | `127.0.0.1:8080` | Listen address for `telegram-mcp http`; loopback hosts only |
+| `TELEGRAM_MCP_HTTP_TOKEN` | Required for `http` | Bearer token, at least 32 characters; generate with `openssl rand -hex 32` |
 
-`~/` in paths expands to the home directory; relative paths are resolved from the working directory. The session is authorization state, separate from environment configuration. It is incompatible with a GramJS string session; run `setup` again. The session file grants access to the account; do not commit `.env`, session files, or downloaded files to Git.
+`~/` in paths expands to the home directory; relative paths are resolved from the working directory. The session is authorization state, separate from environment configuration. It is incompatible with a GramJS string session; run `setup` again. The session file grants access to the account; do not commit `.env`, session files, or downloaded files to Git. The HTTP settings are read only by `telegram-mcp http`; stdio startup ignores them.
 
 ## Tools
 
@@ -124,7 +250,7 @@ internal/config          — environment loading and validation
 internal/domain          — messages, chats, folders, media; standard library only
 internal/port            — outbound Telegram interface
 internal/app             — use cases, validation, limits, formatting
-internal/adapter/mcp     — inbound `Executor` port, MCP schemas, and stdio server
+internal/adapter/mcp     — inbound `Executor` port, MCP schemas, stdio server, and HTTP handler
 internal/adapter/telegram — outbound MTProto adapter and file downloads
 ```
 

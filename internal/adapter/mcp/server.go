@@ -1,4 +1,4 @@
-// Package mcp is the incoming stdio MCP adapter.
+// Package mcp is the incoming stdio and HTTP MCP adapter.
 package mcp
 
 import (

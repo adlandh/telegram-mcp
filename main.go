@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -36,12 +38,17 @@ func main() {
 }
 
 func run(ctx context.Context, args []string) error {
-	setup, qrLogin := false, false
+	setup, qrLogin, httpMode := false, false, false
 	if len(args) > 0 {
 		switch args[0] {
 		case "-h", "--help", "help":
-			fmt.Fprintln(os.Stderr, "Usage: telegram-mcp [setup [qr]]\nSettings: TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE (setup only).\nSee .env.example for optional paths, download limit and timeout.")
+			fmt.Fprintln(os.Stderr, "Usage: telegram-mcp [setup [qr] | http]\nWithout arguments, serves MCP over stdio; http serves it at http://TELEGRAM_MCP_HTTP_ADDR/mcp.\nSettings: TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE (setup only),\nTELEGRAM_MCP_HTTP_TOKEN and TELEGRAM_MCP_HTTP_ADDR (http only).\nSee .env.example for optional paths, download limit and timeout.")
 			return nil
+		case "http":
+			if len(args) > 1 {
+				return fmt.Errorf("unexpected arguments")
+			}
+			httpMode = true
 		case "setup":
 			setup = true
 			if len(args) > 1 {
@@ -70,6 +77,11 @@ func run(ctx context.Context, args []string) error {
 	}
 	if setup && !qrLogin && cfg.Phone == "" {
 		return fmt.Errorf("TELEGRAM_PHONE is required for setup")
+	}
+	if httpMode {
+		if err := cfg.CheckHTTP(); err != nil {
+			return err
+		}
 	}
 	if setup {
 		if err := os.MkdirAll(filepath.Dir(cfg.SessionPath), 0700); err != nil {
@@ -102,8 +114,39 @@ func run(ctx context.Context, args []string) error {
 		if !status.Authorized {
 			return fmt.Errorf("session is not authorized; run telegram-mcp setup")
 		}
+		if httpMode {
+			return serveHTTP(ctx, cfg, server)
+		}
 		return server.Run(ctx, &mcp.StdioTransport{})
 	})
+}
+
+func serveHTTP(ctx context.Context, cfg config.Config, server *mcp.Server) error {
+	srv := &http.Server{
+		Addr: cfg.HTTPAddr, Handler: mcpadapter.HTTPHandler(server, cfg.HTTPToken), ReadHeaderTimeout: 10 * time.Second,
+		BaseContext: func(net.Listener) context.Context { return ctx }, // SIGTERM cancels in-flight tool calls
+	}
+	ln, err := net.Listen("tcp", cfg.HTTPAddr)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "serving MCP on http://%s/mcp\n", ln.Addr())
+	errc := make(chan error, 1)
+	go func() { errc <- srv.Serve(ln) }()
+	select {
+	case err := <-errc:
+		return err
+	case <-ctx.Done():
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		return err
+	}
+	if err := <-errc; !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return ctx.Err()
 }
 
 func providers() fx.Option {

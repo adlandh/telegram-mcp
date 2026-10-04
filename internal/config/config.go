@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -17,6 +18,7 @@ type Config struct {
 	APIHash, Phone, SessionPath, DownloadDir string
 	MaxDownloadMB                            int64
 	RequestTimeout                           time.Duration
+	HTTPAddr, HTTPToken                      string
 }
 
 func Load() (Config, error) {
@@ -49,7 +51,24 @@ func Load() (Config, error) {
 	if err != nil || c.RequestTimeout <= 0 {
 		return c, fmt.Errorf("TELEGRAM_REQUEST_TIMEOUT must be a positive duration, for example 5m")
 	}
+	c.HTTPAddr = cmp.Or(strings.TrimSpace(os.Getenv("TELEGRAM_MCP_HTTP_ADDR")), "127.0.0.1:8080")
+	c.HTTPToken = strings.TrimSpace(os.Getenv("TELEGRAM_MCP_HTTP_TOKEN"))
 	return c, nil
+}
+
+// CheckHTTP validates settings used only by the http command.
+func (c Config) CheckHTTP() error {
+	if len(c.HTTPToken) < 32 {
+		return fmt.Errorf("TELEGRAM_MCP_HTTP_TOKEN must contain at least 32 characters, for example from openssl rand -hex 32")
+	}
+	host, _, err := net.SplitHostPort(c.HTTPAddr)
+	if err != nil {
+		return fmt.Errorf("TELEGRAM_MCP_HTTP_ADDR must be host:port: %w", err)
+	}
+	if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+		return fmt.Errorf("TELEGRAM_MCP_HTTP_ADDR must use a loopback host such as 127.0.0.1; publish it through a TLS reverse proxy")
+	}
+	return nil
 }
 
 func expand(path, home string) (string, error) {

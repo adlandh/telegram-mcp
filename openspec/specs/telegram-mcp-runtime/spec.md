@@ -190,7 +190,7 @@ Setup SHALL also provide a code-free `setup qr` alternative that renders a QR lo
 
 ### Requirement: Stdio isolation and read-only account access
 
-Normal invocation SHALL serve MCP over stdin/stdout. Diagnostics and setup prompts SHALL go to stderr. Help SHALL succeed without credentials. Tools SHALL NOT send, edit, delete, or join chats. No tool other than `mark_read` SHALL acknowledge messages as read. Each tool call SHALL receive the configured request deadline and propagate cancellation to external operations; normal serving SHALL respond to process termination signals by canceling its lifecycle.
+Invocation without arguments SHALL serve MCP over stdin/stdout. The `http` command SHALL serve MCP over HTTP instead and SHALL NOT read MCP messages from stdin. Diagnostics and setup prompts SHALL go to stderr. Help SHALL succeed without credentials. Tools SHALL NOT send, edit, delete, or join chats. No tool other than `mark_read` SHALL acknowledge messages as read. Each tool call SHALL receive the configured request deadline and propagate cancellation to external operations; normal serving SHALL respond to process termination signals by canceling its lifecycle.
 
 #### Scenario: Help and startup errors keep stdout clean
 
@@ -206,3 +206,8 @@ Normal invocation SHALL serve MCP over stdin/stdout. Diagnostics and setup promp
 
 - **WHEN** a caller reads, searches, polls or downloads messages
 - **THEN** Telegram read state is unchanged unless the caller separately invokes `mark_read`
+
+#### Scenario: HTTP mode does not use stdio for MCP
+
+- **WHEN** the server runs as `telegram-mcp http`
+- **THEN** it serves MCP only over HTTP and writes nothing to stdout

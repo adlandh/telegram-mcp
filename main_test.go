@@ -20,21 +20,30 @@ func TestRunStartup(t *testing.T) {
 		args          []string
 		invalidConfig bool
 		want          string
+		env           map[string]string
 	}{
-		{"help", []string{"--help"}, true, ""},
-		{"short help", []string{"-h"}, true, ""},
-		{"help command", []string{"help"}, true, ""},
-		{"unknown", []string{"unknown"}, true, "unknown command"},
-		{"extra", []string{"setup", "extra"}, true, "use setup or setup qr"},
-		{"qr extra", []string{"setup", "qr", "extra"}, true, "unexpected arguments"},
-		{"configuration", nil, true, "TELEGRAM_API_ID"},
-		{"phone", []string{"setup"}, false, "TELEGRAM_PHONE is required"},
-		{"session", nil, false, "session unavailable"},
+		{"help", []string{"--help"}, true, "", nil},
+		{"short help", []string{"-h"}, true, "", nil},
+		{"help command", []string{"help"}, true, "", nil},
+		{"unknown", []string{"unknown"}, true, "unknown command", nil},
+		{"extra", []string{"setup", "extra"}, true, "use setup or setup qr", nil},
+		{"qr extra", []string{"setup", "qr", "extra"}, true, "unexpected arguments", nil},
+		{"configuration", nil, true, "TELEGRAM_API_ID", nil},
+		{"phone", []string{"setup"}, false, "TELEGRAM_PHONE is required", nil},
+		{"session", nil, false, "session unavailable", nil},
+		{"http extra", []string{"http", "extra"}, true, "unexpected arguments", nil},
+		{"http token", []string{"http"}, false, "TELEGRAM_MCP_HTTP_TOKEN", nil},
+		{"http public", []string{"http"}, false, "TELEGRAM_MCP_HTTP_ADDR", map[string]string{"TELEGRAM_MCP_HTTP_ADDR": ":8080", "TELEGRAM_MCP_HTTP_TOKEN": "0123456789abcdef0123456789abcdef"}},
+		{"http session", []string{"http"}, false, "session unavailable", map[string]string{"TELEGRAM_MCP_HTTP_TOKEN": "0123456789abcdef0123456789abcdef"}},
+		{"stdio ignores http", nil, false, "session unavailable", map[string]string{"TELEGRAM_MCP_HTTP_ADDR": ":8080", "TELEGRAM_MCP_HTTP_TOKEN": "short"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			sessionPath := testConfig(t)
 			if tt.invalidConfig {
 				t.Setenv("TELEGRAM_API_ID", "")
+			}
+			for key, value := range tt.env {
+				t.Setenv(key, value)
 			}
 			stdout, err := os.CreateTemp(t.TempDir(), "stdout")
 			if err != nil {
@@ -140,6 +149,8 @@ func testConfig(t *testing.T) string {
 		"TELEGRAM_DOWNLOAD_DIR":    t.TempDir(),
 		"TELEGRAM_MAX_DOWNLOAD_MB": "200",
 		"TELEGRAM_REQUEST_TIMEOUT": "5m",
+		"TELEGRAM_MCP_HTTP_ADDR":   "",
+		"TELEGRAM_MCP_HTTP_TOKEN":  "",
 	} {
 		t.Setenv(key, value)
 	}
