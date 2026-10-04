@@ -122,9 +122,10 @@ func run(ctx context.Context, args []string) error {
 }
 
 func serveHTTP(ctx context.Context, cfg config.Config, server *mcp.Server) error {
+	handler, waitCalls := mcpadapter.HTTPHandler(ctx, server, cfg.HTTPToken)
 	srv := &http.Server{
-		Addr: cfg.HTTPAddr, Handler: mcpadapter.HTTPHandler(server, cfg.HTTPToken), ReadHeaderTimeout: 10 * time.Second,
-		BaseContext: func(net.Listener) context.Context { return ctx }, // SIGTERM cancels in-flight tool calls
+		Addr: cfg.HTTPAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second,
+		BaseContext: func(net.Listener) context.Context { return ctx },
 	}
 	ln, err := net.Listen("tcp", cfg.HTTPAddr)
 	if err != nil {
@@ -140,7 +141,10 @@ func serveHTTP(ctx context.Context, cfg config.Config, server *mcp.Server) error
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
+	err = srv.Shutdown(shutdownCtx)
+	// Drain cancelled tool calls while the Telegram client is still running, so download cleanup completes.
+	waitCalls()
+	if err != nil {
 		return err
 	}
 	if err := <-errc; !errors.Is(err, http.ErrServerClosed) {

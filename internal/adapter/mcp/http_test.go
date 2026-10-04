@@ -5,7 +5,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/adlandh/telegram-mcp/internal/app"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -22,10 +24,11 @@ func (b bearer) RoundTrip(r *http.Request) (*http.Response, error) {
 func TestHTTPHandler(t *testing.T) {
 	const token = "0123456789abcdef0123456789abcdef"
 	calls := 0
-	srv := httptest.NewServer(HTTPHandler(New(executorFunc(func(_ context.Context, name string, _ app.Arguments) (string, error) {
+	handler, _ := HTTPHandler(t.Context(), New(executorFunc(func(_ context.Context, name string, _ app.Arguments) (string, error) {
 		calls++
 		return name, nil
-	})), token))
+	})), token)
+	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 	endpoint := srv.URL + "/mcp"
 	initialize := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}`
@@ -84,5 +87,40 @@ func TestHTTPHandler(t *testing.T) {
 	r, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: "list_folders", Arguments: map[string]any{}})
 	if err != nil || r.IsError || r.Content[0].(*mcp.TextContent).Text != "list_folders" || calls != 1 {
 		t.Fatalf("call: %+v, %v, calls=%d", r, err, calls)
+	}
+}
+
+func TestHTTPHandlerShutdownCancelsAndDrainsCalls(t *testing.T) {
+	const token = "0123456789abcdef0123456789abcdef"
+	life, stop := context.WithCancel(t.Context())
+	started := make(chan struct{})
+	var cancelled, cleaned atomic.Bool
+	handler, wait := HTTPHandler(life, New(executorFunc(func(ctx context.Context, _ string, _ app.Arguments) (string, error) {
+		close(started)
+		select {
+		case <-ctx.Done():
+			cancelled.Store(true)
+		case <-time.After(5 * time.Second):
+		}
+		time.Sleep(50 * time.Millisecond) // simulate removing an incomplete download
+		cleaned.Store(true)
+		return "", ctx.Err()
+	})), token)
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil).Connect(t.Context(),
+		&mcp.StreamableClientTransport{Endpoint: srv.URL + "/mcp", HTTPClient: &http.Client{Transport: bearer{token}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cs.Close() })
+	go func() {
+		_, _ = cs.CallTool(context.WithoutCancel(t.Context()), &mcp.CallToolParams{Name: "list_folders", Arguments: map[string]any{}})
+	}()
+	<-started
+	stop()
+	wait()
+	if !cancelled.Load() || !cleaned.Load() {
+		t.Fatalf("cancelled=%v cleaned=%v: shutdown must cancel and drain in-flight calls", cancelled.Load(), cleaned.Load())
 	}
 }
