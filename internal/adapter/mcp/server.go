@@ -3,6 +3,8 @@ package mcp
 
 import (
 	"context"
+	"slices"
+
 	"github.com/adlandh/telegram-mcp/internal/app"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -34,7 +36,7 @@ func New(service Executor) *mcp.Server {
 		{"mark_read", "Mark messages as read in Telegram (changes account state). Telegram tracks a read cursor, so messageId marks every message up to and including it; omit it to mark the whole chat read.", []string{"groupUrl"}, []string{"messageId"}},
 	} {
 		properties := map[string]any{}
-		for _, key := range append(append([]string{}, def.required...), def.optional...) {
+		for _, key := range slices.Concat(def.required, def.optional) {
 			p := map[string]any{"type": "integer", "minimum": 1}
 			switch key {
 			case "groupUrl":

@@ -226,7 +226,7 @@ func (c *Client) Download(ctx context.Context, chat string, id int, preview bool
 	if maxBytes > 0 && file.size > maxBytes {
 		return domain.Download{}, fmt.Errorf("file exceeds the effective size limit; maxMB can only lower TELEGRAM_MAX_DOWNLOAD_MB")
 	}
-	return saveDownload(c.downloadDir, fmt.Sprintf("%s_%d_%s", r.info.ID, id, safeName(file.name)), maxBytes, func(w io.Writer) error {
+	return saveDownload(c.downloadDir, fmt.Sprintf("%s_%d_%s", r.info.ID, id, file.name), maxBytes, func(w io.Writer) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}

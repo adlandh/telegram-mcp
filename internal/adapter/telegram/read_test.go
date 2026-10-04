@@ -43,7 +43,7 @@ func markReadClient(t *testing.T, input tg.InputPeerClass, dialog *tg.Dialog, fa
 		}
 		return nil
 	}))}
-	c.store("-5", resolved{input: input, info: domain.Chat{ID: "-5"}, known: true})
+	c.peers.Store("-5", resolved{input: input, info: domain.Chat{ID: "-5"}, known: true})
 	return c, &calls
 }
 

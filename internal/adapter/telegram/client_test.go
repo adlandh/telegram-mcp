@@ -332,7 +332,7 @@ func TestSelfChatHasAbout(t *testing.T) {
 
 func TestChatRefreshesCachedMetadata(t *testing.T) {
 	c := &Client{}
-	c.store("-1000000000042", resolved{input: &tg.InputPeerChannel{ChannelID: 42, AccessHash: 99}, info: domain.Chat{ID: "-1000000000042", Title: "Old", Type: "Channel"}, known: true})
+	c.peers.Store("-1000000000042", resolved{input: &tg.InputPeerChannel{ChannelID: 42, AccessHash: 99}, info: domain.Chat{ID: "-1000000000042", Title: "Old", Type: "Channel"}, known: true})
 	c.api = tg.NewClient(invokeFunc(func(_ context.Context, in bin.Encoder, out bin.Decoder) error {
 		if _, ok := in.(*tg.ChannelsGetFullChannelRequest); !ok {
 			t.Fatalf("unexpected %T", in)

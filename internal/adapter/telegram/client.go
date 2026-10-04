@@ -11,7 +11,6 @@ import (
 	"sync"
 
 	"github.com/adlandh/telegram-mcp/internal/domain"
-	"github.com/adlandh/telegram-mcp/internal/port"
 	gotd "github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/message/peer"
 	"github.com/gotd/td/telegram/query"
@@ -21,11 +20,8 @@ import (
 type Client struct {
 	api         *tg.Client
 	downloadDir string
-	mu          sync.Mutex
-	peers       map[string]resolved // ponytail: never invalidated; restart clears it
+	peers       sync.Map // string -> resolved; ponytail: never invalidated, restart clears it
 }
-
-var _ port.Telegram = (*Client)(nil)
 
 func New(client *gotd.Client, downloadDir string) *Client {
 	return &Client{api: client.API(), downloadDir: downloadDir}
@@ -78,8 +74,8 @@ func (c *Client) resolve(ctx context.Context, raw string) (resolved, error) {
 	}
 	if id, err := strconv.ParseInt(name, 10, 64); err == nil {
 		// Numeric peers need an access hash, including after restart.
-		if r, ok := c.cached(name); ok {
-			return r, nil
+		if r, ok := c.peers.Load(name); ok {
+			return r.(resolved), nil
 		}
 		var fallback *resolved
 		for _, folder := range []int{0, 1} {
@@ -92,7 +88,7 @@ func (c *Client) resolve(ctx context.Context, raw string) (resolved, error) {
 				}
 				r := describe(d.Peer, e.Entities)
 				r.input = e.Peer
-				c.store(r.info.ID, r)
+				c.peers.Store(r.info.ID, r)
 				if r.info.ID == name {
 					return r, nil
 				}
@@ -105,7 +101,7 @@ func (c *Client) resolve(ctx context.Context, raw string) (resolved, error) {
 			}
 		}
 		if fallback != nil {
-			c.store(name, *fallback)
+			c.peers.Store(name, *fallback)
 			return *fallback, nil
 		}
 		return resolved{}, fmt.Errorf("chat ID not found in account dialogs; use list_dialogs or a username")
@@ -118,22 +114,6 @@ func (c *Client) resolve(ctx context.Context, raw string) (resolved, error) {
 	info := describe(r.Peer, entities)
 	info.input, err = entities.ExtractPeer(r.Peer)
 	return info, err
-}
-
-func (c *Client) cached(key string) (resolved, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	r, ok := c.peers[key]
-	return r, ok
-}
-
-func (c *Client) store(key string, r resolved) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.peers == nil {
-		c.peers = map[string]resolved{}
-	}
-	c.peers[key] = r
 }
 
 func describe(p tg.PeerClass, entities peer.Entities) resolved {
@@ -162,11 +142,6 @@ func describe(p tg.PeerClass, entities peer.Entities) resolved {
 		r.info.Username = "@" + r.info.Username
 	}
 	return r
-}
-
-func fullEntities(users []tg.UserClass, chats []tg.ChatClass) peer.Entities {
-	cs := tg.ChatClassArray(chats)
-	return peer.NewEntities(tg.UserClassArray(users).UserToMap(), cs.ChatToMap(), cs.ChannelToMap())
 }
 
 func (c *Client) Dialogs(ctx context.Context, limit int, archived bool) ([]domain.Chat, error) {
@@ -235,14 +210,14 @@ func (c *Client) Chat(ctx context.Context, name string) (domain.Chat, error) {
 		if userErr != nil {
 			return domain.Chat{}, userErr
 		}
-		self, current = &tg.PeerUser{UserID: p.UserID}, fullEntities(u.Users, u.Chats)
+		self, current = &tg.PeerUser{UserID: p.UserID}, peer.EntitiesFromResult(u)
 		r.info.About = u.FullUser.About
 	}
 	if err != nil {
 		return domain.Chat{}, err
 	}
 	if full != nil {
-		current = fullEntities(full.Users, full.Chats)
+		current = peer.EntitiesFromResult(full)
 	}
 	// Cached peers can carry stale metadata; prefer the entity from this response.
 	if fresh := describe(self, current); fresh.known {

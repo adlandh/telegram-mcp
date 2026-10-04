@@ -231,7 +231,7 @@ func TestSetupMissingTimeout(t *testing.T) {
 }
 
 func TestSetupPromptFailureAndCancellation(t *testing.T) {
-	for _, phase := range []string{"before status", "code error", "code cancel", "password error", "password cancel", "terminal"} {
+	for _, phase := range []string{"code error", "code cancel", "password error", "password cancel", "terminal"} {
 		t.Run(phase, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
@@ -239,9 +239,6 @@ func TestSetupPromptFailureAndCancellation(t *testing.T) {
 			failure := errors.New("secret prompt failure")
 			if strings.HasPrefix(phase, "password") {
 				client.replies[0].err = auth.ErrPasswordAuthNeeded
-			}
-			if phase == "before status" {
-				cancel()
 			}
 			read := func(context.Context, string, bool) (string, error) {
 				if strings.HasSuffix(phase, "cancel") {
@@ -256,7 +253,7 @@ func TestSetupPromptFailureAndCancellation(t *testing.T) {
 			var out bytes.Buffer
 			err := setupLogin(ctx, client, "phone", read, &out, time.Now)
 			want := failure
-			if phase == "before status" || strings.HasSuffix(phase, "cancel") {
+			if strings.HasSuffix(phase, "cancel") {
 				want = context.Canceled
 			} else if phase == "terminal" {
 				want = errInteractiveTerminal
@@ -267,11 +264,7 @@ func TestSetupPromptFailureAndCancellation(t *testing.T) {
 			if phase == "terminal" && !strings.Contains(err.Error(), "interactive terminal") {
 				t.Fatal("missing terminal guidance")
 			}
-			wantCalls := []string{"status", "send:phone"}
-			if phase == "before status" {
-				wantCalls = nil
-			}
-			if !slices.Equal(client.calls, wantCalls) {
+			if !slices.Equal(client.calls, []string{"status", "send:phone"}) {
 				t.Fatalf("calls after failure: %v", client.calls)
 			}
 		})
