@@ -3,7 +3,7 @@ package telegram
 import (
 	"context"
 	"fmt"
-	"strconv"
+	"slices"
 	"time"
 
 	"github.com/adlandh/telegram-mcp/internal/domain"
@@ -13,47 +13,37 @@ import (
 	"github.com/gotd/td/tgerr"
 )
 
-// folderPeerKey keeps users, basic groups, and channels distinct even when IDs overlap.
-func folderPeerKey(p tg.PeerClass) string {
-	switch p := p.(type) {
-	case *tg.PeerUser:
-		return "user:" + strconv.FormatInt(p.UserID, 10)
-	case *tg.PeerChat:
-		return "chat:" + strconv.FormatInt(p.ChatID, 10)
-	case *tg.PeerChannel:
-		return "channel:" + strconv.FormatInt(p.ChannelID, 10)
-	}
-	return ""
-}
-
+// folderInputKey returns the marked ID, matching describe's info.ID; marked IDs
+// keep users, basic groups, and channels distinct even when raw IDs overlap.
 func folderInputKey(p tg.InputPeerClass) string {
+	var key tg.PeerClass
 	switch p := p.(type) {
 	case *tg.InputPeerUser:
-		return "user:" + strconv.FormatInt(p.UserID, 10)
+		key = &tg.PeerUser{UserID: p.UserID}
 	case *tg.InputPeerUserFromMessage:
-		return "user:" + strconv.FormatInt(p.UserID, 10)
+		key = &tg.PeerUser{UserID: p.UserID}
 	case *tg.InputPeerChat:
-		return "chat:" + strconv.FormatInt(p.ChatID, 10)
+		key = &tg.PeerChat{ChatID: p.ChatID}
 	case *tg.InputPeerChannel:
-		return "channel:" + strconv.FormatInt(p.ChannelID, 10)
+		key = &tg.PeerChannel{ChannelID: p.ChannelID}
 	case *tg.InputPeerChannelFromMessage:
-		return "channel:" + strconv.FormatInt(p.ChannelID, 10)
+		key = &tg.PeerChannel{ChannelID: p.ChannelID}
 	case *tg.InputPeerSelf:
 		return "self"
 	}
-	return ""
+	return describe(key, peer.Entities{}).info.ID
 }
 
 type folderDialog struct {
+	resolved
 	dialog *tg.Dialog
-	info   domain.Chat
 	users  peer.Entities
 }
 
 func folderDialogFrom(d *tg.Dialog, entities peer.Entities) folderDialog {
-	info := describe(d.Peer, entities).info
-	info.Unread = d.UnreadCount
-	return folderDialog{dialog: d, info: info, users: entities}
+	r := describe(d.Peer, entities)
+	r.info.Unread = d.UnreadCount
+	return folderDialog{resolved: r, dialog: d, users: entities}
 }
 
 func (d folderDialog) isSelf() bool {
@@ -63,21 +53,6 @@ func (d folderDialog) isSelf() bool {
 	}
 	u, ok := d.users.User(p.UserID)
 	return ok && u.Self
-}
-
-func (d folderDialog) hasEntity() bool {
-	switch p := d.dialog.Peer.(type) {
-	case *tg.PeerUser:
-		_, ok := d.users.User(p.UserID)
-		return ok
-	case *tg.PeerChat:
-		_, ok := d.users.Chat(p.ChatID)
-		return ok
-	case *tg.PeerChannel:
-		_, ok := d.users.Channel(p.ChannelID)
-		return ok
-	}
-	return false
 }
 
 func (d folderDialog) category(f *tg.DialogFilter) (tg.InputNotifyPeerClass, bool, error) {
@@ -116,9 +91,6 @@ func (d folderDialog) category(f *tg.DialogFilter) (tg.InputNotifyPeerClass, boo
 }
 
 func (c *Client) FolderDialogs(ctx context.Context, folderID, limit int) ([]domain.Chat, error) {
-	if folderID < 2 || folderID > 1<<31-1 || limit <= 0 {
-		return nil, fmt.Errorf("invalid folder ID or limit")
-	}
 	filters, err := c.api.MessagesGetDialogFilters(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("get folder filters: %w", err)
@@ -154,7 +126,7 @@ func (c *Client) FolderDialogs(ctx context.Context, folderID, limit int) ([]doma
 	}
 	seen := make(map[string]bool)
 	ordered := make([]tg.InputPeerClass, 0, len(pinned)+len(included))
-	for _, p := range append(append([]tg.InputPeerClass{}, pinned...), included...) {
+	for _, p := range slices.Concat(pinned, included) {
 		key := folderInputKey(p)
 		if key == "" {
 			return nil, fmt.Errorf("unsupported included peer %T", p)
@@ -194,13 +166,10 @@ func (c *Client) FolderDialogs(ctx context.Context, folderID, limit int) ([]doma
 		for _, response := range responses {
 			entities := peer.EntitiesFromResult(response)
 			for _, item := range response.Dialogs {
-				d, ok := item.(*tg.Dialog)
-				if !ok {
-					continue
-				}
-				key := folderPeerKey(d.Peer)
-				if key != "" {
-					available[key] = folderDialogFrom(d, entities)
+				if d, ok := item.(*tg.Dialog); ok {
+					if fd := folderDialogFrom(d, entities); fd.info.ID != "" {
+						available[fd.info.ID] = fd
+					}
 				}
 			}
 		}
@@ -215,7 +184,7 @@ func (c *Client) FolderDialogs(ctx context.Context, folderID, limit int) ([]doma
 				}
 			}
 			d, ok := available[key]
-			if !ok || !d.hasEntity() || seen["output:"+key] || deny[key] || (deny["self"] && d.isSelf()) {
+			if !ok || !d.known || seen["output:"+key] || deny[key] || (deny["self"] && d.isSelf()) {
 				continue
 			}
 			result = append(result, d.info)
@@ -230,13 +199,10 @@ func (c *Client) FolderDialogs(ctx context.Context, folderID, limit int) ([]doma
 	}
 	defaults := map[string]*tg.PeerNotifySettings{}
 	now := int(time.Now().Unix())
-	for _, archived := range []bool{false, true} {
+	for peerFolder := range 2 {
+		archived := peerFolder == 1
 		if archived && regular.ExcludeArchived {
 			break
-		}
-		peerFolder := 0
-		if archived {
-			peerFolder = 1
 		}
 		iter := query.GetDialogs(c.api).FolderID(peerFolder).BatchSize(100).Iter()
 		for len(result) < limit && iter.Next(ctx) {
@@ -245,11 +211,11 @@ func (c *Client) FolderDialogs(ctx context.Context, folderID, limit int) ([]doma
 			if !ok {
 				continue
 			}
-			key := folderPeerKey(d.Peer)
+			candidate := folderDialogFrom(d, e.Entities)
+			key := candidate.info.ID
 			if key == "" || seen["output:"+key] || deny[key] {
 				continue
 			}
-			candidate := folderDialogFrom(d, e.Entities)
 			if deny["self"] && candidate.isSelf() {
 				continue
 			}

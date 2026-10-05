@@ -26,21 +26,12 @@ type setupClient interface {
 type setupPrompt func(context.Context, string, bool) (string, error)
 
 func setupLogin(ctx context.Context, client setupClient, phone string, read setupPrompt, out io.Writer, now func() time.Time) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	status, err := client.Status(ctx)
 	if err != nil {
 		return loginError("check authorization", err)
 	}
-	if status == nil {
-		return errors.New("missing authorization status")
-	}
 	if status.Authorized {
 		return nil
-	}
-	if err := ctx.Err(); err != nil {
-		return err
 	}
 	response, err := client.SendCode(ctx, phone, auth.SendCodeOptions{})
 	stage := "request login code"
@@ -173,9 +164,6 @@ type qrPasswordClient interface {
 // A confirmed scan on a 2FA-protected account still requires the password: Telegram reports
 // SESSION_PASSWORD_NEEDED instead of completing authorization, so prompt for it like the code flow.
 func setupQR(ctx context.Context, qr qrClient, passwords qrPasswordClient, loggedIn qrlogin.LoggedIn, out io.Writer, read setupPrompt) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	if _, err := fmt.Fprintln(out, "Scan the QR code with the Telegram app on the logged-in phone (Settings → Devices → Scan QR Code)."); err != nil {
 		return loginError("display QR instructions", err)
 	}
