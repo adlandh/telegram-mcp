@@ -85,3 +85,22 @@ Downloads SHALL sanitize untrusted filename components, stay inside the configur
 
 - **WHEN** a document named with 80 characters and ending in `.pdf` is downloaded
 - **THEN** the saved filename is shortened and still ends in `.pdf`
+
+### Requirement: Complete document downloads
+
+A full `download_media` of a document SHALL succeed only when the bytes written equal the document's reported size. A shorter or longer transfer SHALL return an error, SHALL NOT report a saved path, and SHALL remove the partial file. Thumbnails and photos SHALL NOT be subject to this check, because their size metadata is not an exact byte count.
+
+#### Scenario: Truncated document is rejected
+
+- **WHEN** a document reports 10 bytes and Telegram ends the transfer after 5 bytes
+- **THEN** the server returns an error, reports no saved path, and leaves no file in the download directory
+
+#### Scenario: Complete document is saved
+
+- **WHEN** a document reports 5 bytes and the transfer writes exactly 5 bytes
+- **THEN** the server saves the file and reports its path and 5-byte size
+
+#### Scenario: Thumbnail is not checked against the document size
+
+- **WHEN** `get_thumbnail` saves a document preview whose bytes differ from the full document's reported size
+- **THEN** the preview is saved successfully

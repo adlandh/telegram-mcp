@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -115,42 +116,49 @@ func run(ctx context.Context, args []string) error {
 			return fmt.Errorf("session is not authorized; run telegram-mcp setup")
 		}
 		if httpMode {
-			return serveHTTP(ctx, cfg, server)
+			ln, err := net.Listen("tcp", cfg.HTTPAddr)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(os.Stderr, "serving MCP on http://%s/mcp\n", ln.Addr())
+			return serveHTTP(ctx, ln, cfg.HTTPToken, server)
 		}
 		return server.Run(ctx, &mcp.StdioTransport{})
 	})
 }
 
-func serveHTTP(ctx context.Context, cfg config.Config, server *mcp.Server) error {
-	handler, waitCalls := mcpadapter.HTTPHandler(ctx, server, cfg.HTTPToken)
+// serveHTTP serves until ctx ends or the listener fails. Either way it cancels in-flight tool calls
+// and drains them while the Telegram client is still running, so download cleanup completes.
+func serveHTTP(parent context.Context, ln net.Listener, token string, server *mcp.Server) error {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	handler, waitCalls := mcpadapter.HTTPHandler(ctx, server, token)
 	srv := &http.Server{
-		Addr: cfg.HTTPAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second,
+		Handler: handler, ReadHeaderTimeout: 10 * time.Second,
 		BaseContext: func(net.Listener) context.Context { return ctx },
 	}
-	ln, err := net.Listen("tcp", cfg.HTTPAddr)
-	if err != nil {
-		return err
-	}
-	fmt.Fprintf(os.Stderr, "serving MCP on http://%s/mcp\n", ln.Addr())
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
+	var serveErr error
 	select {
-	case err := <-errc:
-		return err
+	case serveErr = <-errc:
 	case <-ctx.Done():
 	}
-	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancel()
-	err = srv.Shutdown(shutdownCtx)
-	// Drain cancelled tool calls while the Telegram client is still running, so download cleanup completes.
+	cancel()
+	shutdownCtx, stop := context.WithTimeout(context.WithoutCancel(parent), 5*time.Second)
+	defer stop()
+	err := srv.Shutdown(shutdownCtx)
 	waitCalls()
+	if serveErr == nil {
+		serveErr = <-errc // Shutdown closed the listener, so Serve has returned.
+	}
+	if !errors.Is(serveErr, http.ErrServerClosed) {
+		return serveErr
+	}
 	if err != nil {
 		return err
 	}
-	if err := <-errc; !errors.Is(err, http.ErrServerClosed) {
-		return err
-	}
-	return ctx.Err()
+	return parent.Err()
 }
 
 func providers() fx.Option {
@@ -159,7 +167,7 @@ func providers() fx.Option {
 		tg.NewUpdateDispatcher,
 		func(cfg config.Config, dispatcher tg.UpdateDispatcher) *telegram.Client {
 			return telegram.NewClient(cfg.APIID, cfg.APIHash, telegram.Options{
-				SessionStorage: &session.FileStorage{Path: cfg.SessionPath}, UpdateHandler: dispatcher,
+				SessionStorage: &atomicSessionStorage{FileStorage: session.FileStorage{Path: cfg.SessionPath}}, UpdateHandler: dispatcher,
 			})
 		},
 		func(client *telegram.Client, cfg config.Config) port.Telegram {
@@ -170,6 +178,34 @@ func providers() fx.Option {
 		},
 		mcpadapter.New,
 	))
+}
+
+// atomicSessionStorage replaces the session file via rename, so a crash or full disk
+// mid-write keeps the previous session instead of a truncated one.
+type atomicSessionStorage struct {
+	session.FileStorage
+	mu sync.Mutex
+}
+
+func (s *atomicSessionStorage) StoreSession(_ context.Context, data []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := os.CreateTemp(filepath.Dir(s.Path), "."+filepath.Base(s.Path)+"-*") // created 0600
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(f.Name()) }() // no-op after a successful rename
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), s.Path)
 }
 
 var errInteractiveTerminal = errors.New("setup requires an interactive terminal")

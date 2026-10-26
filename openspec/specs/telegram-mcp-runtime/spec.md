@@ -211,3 +211,17 @@ Invocation without arguments SHALL serve MCP over stdin/stdout. The `http` comma
 
 - **WHEN** the server runs as `telegram-mcp http`
 - **THEN** it serves MCP only over HTTP and writes nothing to stdout
+
+### Requirement: Crash-safe session persistence
+
+Every write of the Telegram session file, during setup and while serving, SHALL replace the file atomically with owner-only 0600 permissions. An interrupted or failed write, including process termination or a full disk, SHALL leave the previously stored session readable and intact, and SHALL NOT leave temporary files behind on a reported failure.
+
+#### Scenario: Failed session write keeps the previous session
+
+- **WHEN** a session file holds a valid session and a later session write fails before completion
+- **THEN** the session file still contains the previous session and no temporary file remains
+
+#### Scenario: Successful session write is private
+
+- **WHEN** a session write completes
+- **THEN** the session file contains the new data and has 0600 permissions

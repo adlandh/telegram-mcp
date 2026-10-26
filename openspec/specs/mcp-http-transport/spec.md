@@ -85,7 +85,7 @@ The server SHALL serve plain HTTP only and SHALL NOT terminate TLS itself; HTTPS
 
 ### Requirement: HTTP lifecycle and output isolation
 
-In HTTP mode, the server SHALL write diagnostics, including the listening address, only to stderr and SHALL leave stdout empty. On SIGINT or SIGTERM it SHALL stop accepting connections, cancel in-flight tool calls and exit. A listen failure, such as an address already in use, SHALL terminate startup with an error.
+In HTTP mode, the server SHALL write diagnostics, including the listening address, only to stderr and SHALL leave stdout empty. On SIGINT or SIGTERM it SHALL stop accepting connections, cancel in-flight tool calls and exit. A listen failure, such as an address already in use, SHALL terminate startup with an error. When serving stops for any reason, including a listener error after startup, the server SHALL cancel in-flight tool calls and wait for them to finish their cleanup before the Telegram connection is closed, and SHALL return the serving error.
 
 #### Scenario: Termination stops the HTTP server
 
@@ -96,3 +96,8 @@ In HTTP mode, the server SHALL write diagnostics, including the listening addres
 
 - **WHEN** the configured address is already in use
 - **THEN** the application exits with an error on stderr
+
+#### Scenario: Listener error drains in-flight calls
+
+- **WHEN** the listener fails while a tool call is blocked in a Telegram operation
+- **THEN** the call receives cancellation and completes its cleanup before HTTP serving returns the listener error
