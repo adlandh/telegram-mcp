@@ -178,14 +178,21 @@ func TestAtomicSessionStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0700) })
-	if err := s.StoreSession(t.Context(), []byte("new")); err == nil {
-		t.Fatal("store into read-only directory succeeded")
-	}
-	if data, err := s.LoadSession(t.Context()); err != nil || string(data) != "old" {
-		t.Fatalf("previous session lost: %q, %v", data, err)
-	}
-	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
-		t.Fatalf("temporary files left: %v", entries)
+	if probe, err := os.CreateTemp(dir, ".probe-*"); err == nil {
+		// Privileged runs (e.g. root in containers) ignore directory modes, so the write cannot be made to fail.
+		_ = probe.Close()
+		_ = os.Remove(probe.Name())
+		t.Log("directory permissions not enforced; skipping write-failure case")
+	} else {
+		if err := s.StoreSession(t.Context(), []byte("new")); err == nil {
+			t.Fatal("store into read-only directory succeeded")
+		}
+		if data, err := s.LoadSession(t.Context()); err != nil || string(data) != "old" {
+			t.Fatalf("previous session lost: %q, %v", data, err)
+		}
+		if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+			t.Fatalf("temporary files left: %v", entries)
+		}
 	}
 	if err := os.Chmod(dir, 0700); err != nil {
 		t.Fatal(err)
