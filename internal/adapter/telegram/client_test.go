@@ -201,7 +201,7 @@ func TestMediaMetadataAndPreview(t *testing.T) {
 func TestDownloadFilesArePrivateBoundedAndCleanedUp(t *testing.T) {
 	dir := t.TempDir()
 	for _, fail := range []bool{false, true} {
-		_, err := saveDownload(dir, "../../escape", 3, func(w io.Writer) error {
+		_, err := saveDownload(dir, "../../escape", 3, 0, func(w io.Writer) error {
 			if _, err := w.Write([]byte("abc")); err != nil {
 				return err
 			}
@@ -221,7 +221,7 @@ func TestDownloadFilesArePrivateBoundedAndCleanedUp(t *testing.T) {
 	}
 	var paths []string
 	for range 2 {
-		f, err := saveDownload(dir, "../../same.txt", 0, func(w io.Writer) error { _, err := io.WriteString(w, "hello"); return err })
+		f, err := saveDownload(dir, "../../same.txt", 0, 0, func(w io.Writer) error { _, err := io.WriteString(w, "hello"); return err })
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -239,14 +239,17 @@ func TestDownloadFilesArePrivateBoundedAndCleanedUp(t *testing.T) {
 	}
 }
 
-func downloadClient(t *testing.T, dir string, cachedProtected, protected bool) (*Client, *int) {
+func pdfDoc(size int64, thumbs ...tg.PhotoSizeClass) *tg.Document {
+	return &tg.Document{ID: 1, Size: size, MimeType: "application/pdf", Thumbs: thumbs, Attributes: []tg.DocumentAttributeClass{&tg.DocumentAttributeFilename{FileName: "report.pdf"}}}
+}
+
+func downloadClient(t *testing.T, dir string, doc *tg.Document, cachedProtected, protected bool) (*Client, *int) {
 	fetched := 0
 	return &Client{downloadDir: dir, api: tg.NewClient(invokeFunc(func(_ context.Context, in bin.Encoder, out bin.Decoder) error {
 		switch r := in.(type) {
 		case *tg.ContactsResolveUsernameRequest:
 			*out.(*tg.ContactsResolvedPeer) = tg.ContactsResolvedPeer{Peer: &tg.PeerChannel{ChannelID: 7}, Chats: []tg.ChatClass{&tg.Channel{ID: 7, AccessHash: 8, Noforwards: cachedProtected}}}
 		case *tg.ChannelsGetMessagesRequest:
-			doc := &tg.Document{ID: 1, Size: 5, MimeType: "application/pdf", Attributes: []tg.DocumentAttributeClass{&tg.DocumentAttributeFilename{FileName: "report.pdf"}}}
 			out.(*tg.MessagesMessagesBox).Messages = &tg.MessagesChannelMessages{
 				Messages: []tg.MessageClass{&tg.Message{ID: 3, PeerID: &tg.PeerChannel{ChannelID: 7}, Media: &tg.MessageMediaDocument{Document: doc}}},
 				Chats:    []tg.ChatClass{&tg.Channel{ID: 7, AccessHash: 8, Noforwards: protected}},
@@ -267,7 +270,7 @@ func downloadClient(t *testing.T, dir string, cachedProtected, protected bool) (
 
 func TestDownloadUsesAPIClient(t *testing.T) {
 	dir := t.TempDir()
-	c, fetched := downloadClient(t, dir, true, false) // protection lifted since resolution
+	c, fetched := downloadClient(t, dir, pdfDoc(5), true, false) // protection lifted since resolution
 	f, err := c.Download(t.Context(), "chan", 3, false, 0)
 	if err != nil || *fetched == 0 {
 		t.Fatalf("download: %+v, %v", f, err)
@@ -278,9 +281,47 @@ func TestDownloadUsesAPIClient(t *testing.T) {
 	}
 }
 
+func TestDownloadRejectsTruncatedDocument(t *testing.T) {
+	dir := t.TempDir()
+	c, fetched := downloadClient(t, dir, pdfDoc(10), false, false) // RPC returns 5 bytes, then EOF
+	if f, err := c.Download(t.Context(), "chan", 3, false, 0); err == nil || *fetched == 0 {
+		t.Fatalf("truncated download: %+v, %v, fetched %d", f, err, *fetched)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("partial files left: %v", entries)
+	}
+}
+
+func TestOversizedDownloadFetchesNothing(t *testing.T) {
+	dir := t.TempDir()
+	c, fetched := downloadClient(t, dir, pdfDoc(5), false, false)
+	if _, err := c.Download(t.Context(), "chan", 3, false, 4); err == nil || *fetched != 0 {
+		t.Fatalf("oversized download: %v, fetched %d", err, *fetched)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("files created: %v", entries)
+	}
+}
+
+func TestEmbeddedThumbnailFetchesNothing(t *testing.T) {
+	for name, thumb := range map[string]tg.PhotoSizeClass{
+		"cached":   &tg.PhotoCachedSize{Type: "s", W: 90, H: 90, Bytes: []byte("thumb")},
+		"stripped": &tg.PhotoStrippedSize{Type: "i", Bytes: []byte{1, 8, 8, 0xaa}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			c, fetched := downloadClient(t, dir, pdfDoc(1<<30, thumb), false, false)
+			f, err := c.Download(t.Context(), "chan", 3, true, 0)
+			if err != nil || *fetched != 0 || f.Bytes == 0 {
+				t.Fatalf("thumbnail: %+v, %v, fetched %d", f, err, *fetched)
+			}
+		})
+	}
+}
+
 func TestDownloadHonorsFreshProtection(t *testing.T) {
 	dir := t.TempDir()
-	c, fetched := downloadClient(t, dir, false, true)
+	c, fetched := downloadClient(t, dir, pdfDoc(5), false, true)
 	if _, err := c.Download(t.Context(), "chan", 3, false, 0); err == nil || *fetched != 0 {
 		t.Fatalf("protected download: %v, fetched %d", err, *fetched)
 	}
@@ -291,7 +332,7 @@ func TestDownloadHonorsFreshProtection(t *testing.T) {
 
 func TestLongFilenameKeepsExtension(t *testing.T) {
 	name := strings.Repeat("a", 76) + ".pdf"
-	f, err := saveDownload(t.TempDir(), name, 0, func(w io.Writer) error { _, err := io.WriteString(w, "x"); return err })
+	f, err := saveDownload(t.TempDir(), name, 0, 0, func(w io.Writer) error { _, err := io.WriteString(w, "x"); return err })
 	if err != nil || !strings.HasSuffix(f.Path, ".pdf") {
 		t.Fatalf("saved %s: %v", f.Path, err)
 	}
@@ -343,5 +384,80 @@ func TestChatRefreshesCachedMetadata(t *testing.T) {
 	chat, err := c.Chat(t.Context(), "-1000000000042")
 	if err != nil || chat.Title != "New" || chat.Username != "@renamed" || chat.About != "bio" || chat.ID != "-1000000000042" {
 		t.Fatalf("chat: %+v, %v", chat, err)
+	}
+}
+
+func TestDialogs(t *testing.T) {
+	var folders []int
+	c := &Client{api: tg.NewClient(invokeFunc(func(_ context.Context, in bin.Encoder, out bin.Decoder) error {
+		req, ok := in.(*tg.MessagesGetDialogsRequest)
+		if !ok {
+			return fmt.Errorf("unexpected request %T", in)
+		}
+		folders = append(folders, req.FolderID)
+		out.(*tg.MessagesDialogsBox).Dialogs = &tg.MessagesDialogs{
+			Dialogs: []tg.DialogClass{
+				&tg.Dialog{Peer: &tg.PeerUser{UserID: 1}, UnreadCount: 3},
+				&tg.DialogFolder{Folder: tg.Folder{ID: 1}, Peer: &tg.PeerUser{UserID: 1}},
+				&tg.Dialog{Peer: &tg.PeerChannel{ChannelID: 2}},
+			},
+			Users: []tg.UserClass{&tg.User{ID: 1, FirstName: "Ann", Username: "ann"}},
+			Chats: []tg.ChatClass{&tg.Channel{ID: 2, Title: "News"}},
+		}
+		return nil
+	}))}
+	got, err := c.Dialogs(t.Context(), 10, false)
+	want := []domain.Chat{
+		{ID: "1", Title: "Ann", Username: "@ann", Type: "User", Unread: 3},
+		{ID: "-1000000000002", Title: "News", Type: "Channel"},
+	}
+	if err != nil || !slices.EqualFunc(got, want, func(a, b domain.Chat) bool { return a == b }) {
+		t.Fatalf("dialogs: %+v, %v", got, err)
+	}
+	if got, err := c.Dialogs(t.Context(), 1, true); err != nil || len(got) != 1 || folders[len(folders)-1] != 1 {
+		t.Fatalf("archived dialogs: %+v, %v, folders %v", got, err, folders)
+	}
+	if folders[0] != 0 {
+		t.Fatalf("main list requested folder %d", folders[0])
+	}
+}
+
+func TestSearchRPCs(t *testing.T) {
+	var got []string
+	c := &Client{api: tg.NewClient(invokeFunc(func(_ context.Context, in bin.Encoder, out bin.Decoder) error {
+		switch req := in.(type) {
+		case *tg.ContactsResolveUsernameRequest:
+			*out.(*tg.ContactsResolvedPeer) = tg.ContactsResolvedPeer{Peer: &tg.PeerChannel{ChannelID: 1}, Chats: []tg.ChatClass{&tg.Channel{ID: 1, AccessHash: 2, Title: "test"}}}
+			return nil
+		case *tg.MessagesSearchRequest:
+			got = append(got, fmt.Sprintf("search %T %q", req.Filter, req.Q))
+		case *tg.MessagesSearchGlobalRequest:
+			got = append(got, fmt.Sprintf("global %q", req.Q))
+		default:
+			return fmt.Errorf("unexpected request %T", in)
+		}
+		out.(*tg.MessagesMessagesBox).Messages = &tg.MessagesMessages{
+			Messages: []tg.MessageClass{&tg.Message{ID: 5, PeerID: &tg.PeerChannel{ChannelID: 1}, Message: "hit"}},
+			Chats:    []tg.ChatClass{&tg.Channel{ID: 1, Title: "test"}},
+		}
+		return nil
+	}))}
+	for _, q := range []domain.MessageQuery{
+		{Chat: "test", Search: "hit", Limit: 10},
+		{Chat: "test", Pinned: true, Limit: 10},
+		{Search: "hit", Global: true, Limit: 10},
+	} {
+		msgs, err := c.Messages(t.Context(), q)
+		if err != nil || len(msgs) != 1 || msgs[0].ID != 5 || msgs[0].Text != "hit" || msgs[0].Chat != "test" {
+			t.Fatalf("%+v: %+v, %v", q, msgs, err)
+		}
+	}
+	want := []string{
+		`search *tg.InputMessagesFilterEmpty "hit"`,
+		`search *tg.InputMessagesFilterPinned ""`,
+		`global "hit"`,
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("RPCs %q, want %q", got, want)
 	}
 }

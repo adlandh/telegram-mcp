@@ -3,12 +3,19 @@ package main
 import (
 	"context"
 	"errors"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	mcpadapter "github.com/adlandh/telegram-mcp/internal/adapter/mcp"
+	"github.com/adlandh/telegram-mcp/internal/app"
 	"github.com/adlandh/telegram-mcp/internal/config"
+	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.uber.org/fx"
@@ -155,4 +162,132 @@ func testConfig(t *testing.T) string {
 		t.Setenv(key, value)
 	}
 	return sessionPath
+}
+
+func TestAtomicSessionStorage(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.json")
+	s := &atomicSessionStorage{FileStorage: session.FileStorage{Path: path}}
+	if err := s.StoreSession(t.Context(), []byte("old")); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("session file: %v, %v", info, err)
+	}
+	if err := os.Chmod(dir, 0500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0700) })
+	if probe, err := os.CreateTemp(dir, ".probe-*"); err == nil {
+		// Privileged runs (e.g. root in containers) ignore directory modes, so the write cannot be made to fail.
+		_ = probe.Close()
+		_ = os.Remove(probe.Name())
+		t.Log("directory permissions not enforced; skipping write-failure case")
+	} else {
+		if err := s.StoreSession(t.Context(), []byte("new")); err == nil {
+			t.Fatal("store into read-only directory succeeded")
+		}
+		if data, err := s.LoadSession(t.Context()); err != nil || string(data) != "old" {
+			t.Fatalf("previous session lost: %q, %v", data, err)
+		}
+		if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+			t.Fatalf("temporary files left: %v", entries)
+		}
+	}
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.StoreSession(t.Context(), []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := s.LoadSession(t.Context()); err != nil || string(data) != "new" {
+		t.Fatalf("session not replaced: %q, %v", data, err)
+	}
+}
+
+type executorFunc func(context.Context, string, app.Arguments) (string, error)
+
+func (f executorFunc) Execute(ctx context.Context, name string, args app.Arguments) (string, error) {
+	return f(ctx, name, args)
+}
+
+var errListenerBroken = errors.New("listener broken")
+
+// brokenListener reports errListenerBroken from Accept once broken is closed.
+type brokenListener struct {
+	net.Listener
+	broken chan struct{}
+}
+
+func (l *brokenListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	select {
+	case <-l.broken:
+		if c != nil {
+			_ = c.Close()
+		}
+		return nil, errListenerBroken
+	default:
+		return c, err
+	}
+}
+
+type bearer string
+
+func (b bearer) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.Header.Set("Authorization", "Bearer "+string(b))
+	return http.DefaultTransport.RoundTrip(r)
+}
+
+func TestServeHTTPDrainsCallsOnEveryExit(t *testing.T) {
+	const token = "0123456789abcdef0123456789abcdef"
+	for name, want := range map[string]error{"listener error": errListenerBroken, "signal": context.Canceled} {
+		t.Run(name, func(t *testing.T) {
+			inner, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			ln := &brokenListener{Listener: inner, broken: make(chan struct{})}
+			started := make(chan struct{})
+			var cancelled, cleaned atomic.Bool
+			server := mcpadapter.New(executorFunc(func(ctx context.Context, _ string, _ app.Arguments) (string, error) {
+				close(started)
+				select {
+				case <-ctx.Done():
+					cancelled.Store(true)
+				case <-time.After(5 * time.Second):
+				}
+				time.Sleep(50 * time.Millisecond) // simulate removing an incomplete download
+				cleaned.Store(true)
+				return "", ctx.Err()
+			}))
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- serveHTTP(ctx, ln, token, server) }()
+			cs, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil).Connect(t.Context(),
+				&mcp.StreamableClientTransport{Endpoint: "http://" + inner.Addr().String() + "/mcp", HTTPClient: &http.Client{Transport: bearer(token)}}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = cs.Close() })
+			go func() {
+				_, _ = cs.CallTool(context.WithoutCancel(t.Context()), &mcp.CallToolParams{Name: "list_folders", Arguments: map[string]any{}})
+			}()
+			<-started
+			if want == errListenerBroken {
+				close(ln.broken)
+				_ = inner.Close()
+			} else {
+				cancel()
+			}
+			if err := <-done; !errors.Is(err, want) {
+				t.Fatalf("serveHTTP returned %v, want %v", err, want)
+			}
+			if !cancelled.Load() || !cleaned.Load() {
+				t.Fatalf("cancelled=%v cleaned=%v: serveHTTP must cancel and drain in-flight calls", cancelled.Load(), cleaned.Load())
+			}
+		})
+	}
 }

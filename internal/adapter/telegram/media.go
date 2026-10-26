@@ -74,6 +74,7 @@ type mediaFile struct {
 	location tg.InputFileLocationClass
 	data     []byte
 	size     int64
+	exact    int64 // expected byte count of a full transfer; 0 = unchecked
 	name     string
 }
 
@@ -135,7 +136,7 @@ func fileFor(m *tg.Message, preview bool) (mediaFile, error) {
 			file.name = info.Type + ext
 		}
 		if !preview {
-			file.location = doc.AsInputDocumentFileLocation("")
+			file.location, file.exact = doc.AsInputDocumentFileLocation(""), doc.Size
 			return file, nil
 		}
 		sizes = doc.Thumbs
@@ -226,7 +227,7 @@ func (c *Client) Download(ctx context.Context, chat string, id int, preview bool
 	if maxBytes > 0 && file.size > maxBytes {
 		return domain.Download{}, fmt.Errorf("file exceeds the effective size limit; maxMB can only lower TELEGRAM_MAX_DOWNLOAD_MB")
 	}
-	return saveDownload(c.downloadDir, fmt.Sprintf("%s_%d_%s", r.info.ID, id, file.name), maxBytes, func(w io.Writer) error {
+	return saveDownload(c.downloadDir, fmt.Sprintf("%s_%d_%s", r.info.ID, id, file.name), maxBytes, file.exact, func(w io.Writer) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -240,7 +241,7 @@ func (c *Client) Download(ctx context.Context, chat string, id int, preview bool
 	})
 }
 
-func saveDownload(dir, name string, maxBytes int64, download func(io.Writer) error) (domain.Download, error) {
+func saveDownload(dir, name string, maxBytes, exact int64, download func(io.Writer) error) (domain.Download, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return domain.Download{}, err
 	}
@@ -254,6 +255,9 @@ func saveDownload(dir, name string, maxBytes int64, download func(io.Writer) err
 	w := &cappedWriter{writer: file, limit: maxBytes}
 	if err := download(w); err != nil {
 		return domain.Download{}, fmt.Errorf("download failed: %w", err)
+	}
+	if exact > 0 && w.written != exact {
+		return domain.Download{}, fmt.Errorf("download incomplete: got %d of %d bytes", w.written, exact)
 	}
 	if err := file.Close(); err != nil {
 		return domain.Download{}, err
