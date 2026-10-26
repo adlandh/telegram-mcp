@@ -20,8 +20,8 @@ func New(service Executor) *mcp.Server {
 		name, description  string
 		required, optional []string
 	}{
-		{"read_messages", "Read recent messages, including album and reply links (default 50, max 200).", []string{"groupUrl"}, []string{"limit"}},
-		{"search_messages", "Search within a chat (default 30, max 100).", []string{"groupUrl", "query"}, []string{"limit"}},
+		{"read_messages", "Read recent messages, including album and reply links (default 50, max 200). Pass the returned nextBeforeId as beforeId to page back through older history until empty.", []string{"groupUrl"}, []string{"limit", "beforeId"}},
+		{"search_messages", "Search within a chat (default 30, max 100). Pass the returned nextBeforeId as beforeId to page back through older matches until empty.", []string{"groupUrl", "query"}, []string{"limit", "beforeId"}},
 		{"get_group_info", "Get chat title, ID, username, member count and description.", []string{"groupUrl"}, nil},
 		{"fetch_since", "Read messages newer than sinceId, oldest first, with a safe next maxId cursor (default 100, max 200).", []string{"groupUrl", "sinceId"}, []string{"limit"}},
 		{"get_message", "Get a message and its engagement, album, reply and media metadata.", []string{"groupUrl", "messageId"}, nil},
@@ -49,6 +49,8 @@ func New(service Executor) *mcp.Server {
 				p["minimum"] = 0
 			case "folderId":
 				p["minimum"] = 2
+				p["maximum"] = 2147483647
+			case "beforeId":
 				p["maximum"] = 2147483647
 			}
 			properties[key] = p

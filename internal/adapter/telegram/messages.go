@@ -23,7 +23,7 @@ func (c *Client) Messages(ctx context.Context, q domain.MessageQuery) ([]domain.
 		input = r.input
 	}
 	result := make([]domain.Message, 0, q.Limit)
-	offset := 0
+	offset := q.BeforeID
 	if q.Since {
 		offset = q.SinceID + 1
 	}
@@ -71,7 +71,8 @@ func (c *Client) Messages(ctx context.Context, q domain.MessageQuery) ([]domain.
 		}
 		previous := offset
 		for _, m := range raw {
-			if q.Since && m.GetID() <= pageMin {
+			// BeforeID is exclusive, like Telegram's offset_id; 0 means latest.
+			if (q.Since && m.GetID() <= pageMin) || (q.BeforeID > 0 && m.GetID() >= q.BeforeID) {
 				continue
 			}
 			offset = m.GetID()

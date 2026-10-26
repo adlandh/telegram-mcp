@@ -18,6 +18,7 @@ type Arguments struct {
 	Query     string `json:"query,omitempty"`
 	Limit     *int   `json:"limit,omitempty"`
 	SinceID   *int   `json:"sinceId,omitempty"`
+	BeforeID  int    `json:"beforeId,omitempty"`
 	MessageID int    `json:"messageId,omitempty"`
 	FolderID  int    `json:"folderId,omitempty"`
 	Archived  bool   `json:"archived,omitempty"`
@@ -56,6 +57,10 @@ func (s *Service) Execute(ctx context.Context, name string, a Arguments) (string
 	if name == "fetch_since" && (a.SinceID == nil || *a.SinceID < 0 || *a.SinceID >= 1<<31-1) {
 		return "", fmt.Errorf("sinceId must be between 0 and 2147483646")
 	}
+	// 0 means beforeId was omitted: read from the latest message.
+	if a.BeforeID < 0 || a.BeforeID > 1<<31-1 {
+		return "", fmt.Errorf("beforeId must be between 1 and 2147483647")
+	}
 	if name == "list_folder_dialogs" && (a.FolderID < 2 || a.FolderID > 1<<31-1) {
 		return "", fmt.Errorf("folderId must be between 2 and 2147483647")
 	}
@@ -80,8 +85,12 @@ func (s *Service) Execute(ctx context.Context, name string, a Arguments) (string
 	case "read_messages", "search_messages", "fetch_since", "get_pinned", "global_search":
 		q := domain.MessageQuery{Chat: a.GroupURL, Limit: limit(50, 200)}
 		switch name {
-		case "search_messages", "global_search":
-			q.Search, q.Global, q.Limit = a.Query, name == "global_search", limit(30, 100)
+		case "read_messages":
+			q.BeforeID = a.BeforeID
+		case "search_messages":
+			q.Search, q.BeforeID, q.Limit = a.Query, a.BeforeID, limit(30, 100)
+		case "global_search":
+			q.Search, q.Global, q.Limit = a.Query, true, limit(30, 100)
 		case "fetch_since":
 			q.Since, q.SinceID, q.Limit = true, *a.SinceID, limit(100, 200)
 		case "get_pinned":
@@ -105,15 +114,26 @@ func (s *Service) Execute(ctx context.Context, name string, a Arguments) (string
 			maxID = max(maxID, m.ID)
 		}
 		body := strings.Join(lines, "\n")
+		// Chat-scoped results are ascending, so msgs[0] is the oldest: the next backward cursor.
+		cursor := ""
+		if len(msgs) > 0 && (name == "read_messages" || name == "search_messages") {
+			cursor = fmt.Sprintf(" (nextBeforeId=%d)", msgs[0].ID)
+		}
 		switch name {
 		case "search_messages", "global_search":
-			return fmt.Sprintf("Found %d messages for %q:\n%s", len(msgs), a.Query, cmp.Or(body, "(none)")), nil
+			return fmt.Sprintf("Found %d messages for %q%s:\n%s", len(msgs), a.Query, cursor, cmp.Or(body, "(none)")), nil
 		case "fetch_since":
 			return fmt.Sprintf("New messages (maxId=%d):\n%s", maxID, cmp.Or(body, "(no new messages)")), nil
 		case "get_pinned":
 			return cmp.Or(body, "(no pinned messages)"), nil
 		default:
-			return cmp.Or(body, "(no messages)"), nil
+			if len(msgs) == 0 && a.BeforeID > 0 {
+				return "(no older messages)", nil
+			}
+			if len(msgs) == 0 {
+				return "(no messages)", nil
+			}
+			return "Messages" + cursor + ":\n" + body, nil
 		}
 	case "get_message", "get_media_info":
 		m, err := s.telegram.Message(ctx, a.GroupURL, a.MessageID)
