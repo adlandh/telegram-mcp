@@ -28,6 +28,7 @@ type fakeTelegram struct {
 	markUpTo    int
 	markErr     error
 	noMessages  bool
+	previewErr  error
 }
 
 func (f *fakeTelegram) MarkRead(_ context.Context, chat string, messageID int) (string, int, error) {
@@ -55,6 +56,12 @@ func (f *fakeTelegram) Messages(ctx context.Context, q domain.MessageQuery) ([]d
 func (f *fakeTelegram) Download(_ context.Context, _ string, _ int, preview bool, maxBytes int64) (domain.Download, error) {
 	f.preview, f.maxBytes = preview, maxBytes
 	return domain.Download{Path: "/tmp/file", Bytes: 10}, nil
+}
+
+func (f *fakeTelegram) Preview(ctx context.Context, _ string, _ int, maxBytes int64) (domain.Image, error) {
+	f.maxBytes = maxBytes
+	_, f.deadline = ctx.Deadline()
+	return domain.Image{Data: []byte("img"), MIME: "image/jpeg"}, f.previewErr
 }
 
 func TestMessageOrderingLimitsAndMetadata(t *testing.T) {
@@ -171,6 +178,24 @@ func TestDownloadLimits(t *testing.T) {
 	}
 	if _, err := New(f, 200, time.Minute).Execute(t.Context(), "get_thumbnail", Arguments{GroupURL: "x", MessageID: 1}); err != nil || !f.preview {
 		t.Fatalf("preview: %v", err)
+	}
+}
+
+func TestViewThumbnail(t *testing.T) {
+	f := &fakeTelegram{}
+	s := New(f, 200, time.Minute)
+	img, err := s.ViewThumbnail(t.Context(), Arguments{GroupURL: " x ", MessageID: 1})
+	if err != nil || img.MIME != "image/jpeg" || f.maxBytes != 200*1024*1024 || !f.deadline {
+		t.Fatalf("view: %+v, limit %d, err %v", img, f.maxBytes, err)
+	}
+	for _, a := range []Arguments{{MessageID: 1}, {GroupURL: " ", MessageID: 1}, {GroupURL: "x"}, {GroupURL: "x", MessageID: 1 << 31}} {
+		if _, err := s.ViewThumbnail(t.Context(), a); err == nil {
+			t.Fatalf("accepted %+v", a)
+		}
+	}
+	f.previewErr = errors.New("no suitable photo or thumbnail available")
+	if _, err := s.ViewThumbnail(t.Context(), Arguments{GroupURL: "x", MessageID: 1}); !errors.Is(err, f.previewErr) {
+		t.Fatalf("telegram error: %v", err)
 	}
 }
 

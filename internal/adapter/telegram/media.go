@@ -1,9 +1,11 @@
 package telegram
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -204,13 +206,40 @@ func (w *cappedWriter) Write(p []byte) (int, error) {
 }
 
 func (c *Client) Download(ctx context.Context, chat string, id int, preview bool, maxBytes int64) (domain.Download, error) {
-	raw, entities, r, err := c.rawMessage(ctx, chat, id)
+	name, exact, stream, err := c.media(ctx, chat, id, preview, maxBytes)
 	if err != nil {
 		return domain.Download{}, err
 	}
+	return saveDownload(c.downloadDir, name, maxBytes, exact, stream)
+}
+
+func (c *Client) Preview(ctx context.Context, chat string, id int, maxBytes int64) (domain.Image, error) {
+	_, _, stream, err := c.media(ctx, chat, id, true, maxBytes)
+	if err != nil {
+		return domain.Image{}, err
+	}
+	var buf bytes.Buffer
+	if err := stream(&cappedWriter{writer: &buf, limit: maxBytes}); err != nil {
+		return domain.Image{}, fmt.Errorf("download failed: %w", err)
+	}
+	mime := http.DetectContentType(buf.Bytes())
+	if !strings.HasPrefix(mime, "image/") {
+		return domain.Image{}, fmt.Errorf("preview is not an image (%s)", mime)
+	}
+	return domain.Image{Data: buf.Bytes(), MIME: mime}, nil
+}
+
+// media resolves a message's media for Download and Preview: it refuses
+// protected content and declared sizes over maxBytes, and returns the file
+// name, the exact expected size, and a function streaming the payload.
+func (c *Client) media(ctx context.Context, chat string, id int, preview bool, maxBytes int64) (string, int64, func(io.Writer) error, error) {
+	raw, entities, r, err := c.rawMessage(ctx, chat, id)
+	if err != nil {
+		return "", 0, nil, err
+	}
 	m, ok := raw.(*tg.Message)
 	if !ok {
-		return domain.Download{}, fmt.Errorf("message has no downloadable media")
+		return "", 0, nil, fmt.Errorf("message has no downloadable media")
 	}
 	// Fresh response entities supersede cached protection in both directions.
 	protected := r.protected
@@ -218,16 +247,16 @@ func (c *Client) Download(ctx context.Context, chat string, id int, preview bool
 		protected = fresh.protected
 	}
 	if m.Noforwards || protected {
-		return domain.Download{}, fmt.Errorf("this chat restricts saving content (no-forward)")
+		return "", 0, nil, fmt.Errorf("this chat restricts saving content (no-forward)")
 	}
 	file, err := fileFor(m, preview)
 	if err != nil {
-		return domain.Download{}, err
+		return "", 0, nil, err
 	}
 	if maxBytes > 0 && file.size > maxBytes {
-		return domain.Download{}, fmt.Errorf("file exceeds the effective size limit; maxMB can only lower TELEGRAM_MAX_DOWNLOAD_MB")
+		return "", 0, nil, fmt.Errorf("file exceeds the effective size limit; maxMB can only lower TELEGRAM_MAX_DOWNLOAD_MB")
 	}
-	return saveDownload(c.downloadDir, fmt.Sprintf("%s_%d_%s", r.info.ID, id, file.name), maxBytes, file.exact, func(w io.Writer) error {
+	return fmt.Sprintf("%s_%d_%s", r.info.ID, id, file.name), file.exact, func(w io.Writer) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -238,7 +267,7 @@ func (c *Client) Download(ctx context.Context, chat string, id int, preview bool
 		// gotd follows FILE_MIGRATE to other DCs and caches those connections.
 		_, err := downloader.NewDownloader().Download(c.api, file.location).Stream(ctx, w)
 		return err
-	})
+	}, nil
 }
 
 func saveDownload(dir, name string, maxBytes, exact int64, download func(io.Writer) error) (domain.Download, error) {

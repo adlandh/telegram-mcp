@@ -10,7 +10,7 @@ A Go MCP server for reading and searching conversations, groups, and channels vi
 
 - **Find context:** read history, search one chat or across chats, inspect replies and pinned messages.
 - **Follow conversations:** browse dialogs and folders, or page through new messages with a safe `fetch_since` cursor.
-- **Inspect media:** view metadata, download files, or fetch thumbnails within configured limits.
+- **Inspect media:** view metadata, download files, fetch thumbnails to a file, or view them inline as images, within configured limits.
 
 ### A tool call
 
@@ -24,9 +24,9 @@ After setup, ask your MCP client to call `fetch_since` with these arguments:
 }
 ```
 
-Replace the example chat and ID. The tool returns the earliest messages after `sinceId`; use the returned `maxId` as the next cursor. See [Tools](#tools) for all 14 tools and their limits.
+Replace the example chat and ID. The tool returns the earliest messages after `sinceId`; use the returned `maxId` as the next cursor. See [Tools](#tools) for all 15 tools and their limits.
 
-**Side effects are explicit:** `mark_read` changes Telegram read state; downloads and thumbnails write local files. Other tools do not mark messages read. Sending, editing, and joining chats are unsupported.
+**Side effects are explicit:** `mark_read` changes Telegram read state; `download_media` and `get_thumbnail` write local files; `view_thumbnail` writes none. Other tools do not mark messages read. Sending, editing, and joining chats are unsupported.
 
 ## Getting started
 
@@ -175,7 +175,7 @@ export TELEGRAM_MCP_HTTP_TOKEN="$(openssl rand -hex 32)"   # keep it; clients ne
 
 - Require `Authorization: Bearer <TELEGRAM_MCP_HTTP_TOKEN>` on every request; otherwise `401`. Protect the token like the session: it grants all tools, including `mark_read` and downloads.
 - Plain HTTP binds only to loopback (`127.0.0.1`, `[::1]`, `localhost`); `0.0.0.0` and `:8080` are refused. Publish through an HTTPS proxy on the same host.
-- Downloads and thumbnails stay on the server host.
+- Files from `download_media` and `get_thumbnail` stay on the server host. Use `view_thumbnail` to get a preview inline in the MCP response.
 - Use a process manager, e.g. systemd with `ExecStart=/path/to/bin/telegram-mcp http` and `EnvironmentFile=`. SIGTERM stops it cleanly.
 
 Caddy example (TLS certificates are obtained automatically):
@@ -229,6 +229,7 @@ Defaults and maximums are listed below. Numeric parameters are integers; chat ID
 | `get_media_info` | `groupUrl`, `messageId` | — |
 | `download_media` | `groupUrl`, `messageId` | `maxMB`: lowers the configured limit; `0` or omitted uses it |
 | `get_thumbnail` | `groupUrl`, `messageId` | — |
+| `view_thumbnail` | `groupUrl`, `messageId` | — |
 | `mark_read` | `groupUrl` | `messageId`: marks up to and including it; omitted marks the whole chat |
 
 ### Chats and folders
@@ -249,7 +250,7 @@ To walk older history, call `read_messages` or `search_messages` without `before
 
 ### Media and local files
 
-Downloads stream with declared-size and actual-byte checks. `get_thumbnail` fetches a preview up to 320 pixels per side or an embedded thumbnail, without full media. Repeated downloads create separate `0600` files; failures remove incomplete files. Both tools refuse saving-prohibited (`no-forward`) media and have MCP annotations for local-file writes. Sending and editing messages are unsupported.
+Downloads stream with declared-size and actual-byte checks. `get_thumbnail` fetches a preview up to 320 pixels per side or an embedded thumbnail, without full media. `view_thumbnail` returns the same preview as MCP image content (with its detected MIME type) and writes no file, so remote HTTP clients can see it; the configured size limit applies to the preview bytes. Repeated downloads create separate `0600` files; failures remove incomplete files. All three tools refuse saving-prohibited (`no-forward`) media; `download_media` and `get_thumbnail` have MCP annotations for local-file writes. Sending and editing messages are unsupported.
 
 ### Read state
 

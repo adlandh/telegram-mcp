@@ -1,11 +1,13 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"testing"
 
 	"github.com/adlandh/telegram-mcp/internal/app"
+	"github.com/adlandh/telegram-mcp/internal/domain"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -13,6 +15,16 @@ type executorFunc func(context.Context, string, app.Arguments) (string, error)
 
 func (f executorFunc) Execute(ctx context.Context, name string, args app.Arguments) (string, error) {
 	return f(ctx, name, args)
+}
+
+var jpeg = []byte("\xff\xd8\xff\xe0")
+
+// ViewThumbnail reuses f so tests can count calls and inject failures.
+func (f executorFunc) ViewThumbnail(ctx context.Context, args app.Arguments) (domain.Image, error) {
+	if _, err := f(ctx, "view_thumbnail", args); err != nil {
+		return domain.Image{}, err
+	}
+	return domain.Image{Data: jpeg, MIME: "image/jpeg"}, nil
 }
 
 func TestMCPContract(t *testing.T) {
@@ -40,7 +52,7 @@ func TestMCPContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 14 {
+	if len(tools.Tools) != 15 {
 		t.Fatalf("got %d tools", len(tools.Tools))
 	}
 	for _, tool := range tools.Tools {
@@ -61,12 +73,17 @@ func TestMCPContract(t *testing.T) {
 				args["query"] = "hello"
 			case "fetch_since":
 				args["sinceId"] = 0
-			case "get_message", "get_media_info", "download_media", "get_thumbnail", "mark_read":
+			case "get_message", "get_media_info", "download_media", "get_thumbnail", "view_thumbnail", "mark_read":
 				args["messageId"] = 1
 			}
 		}
 		r, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: tool.Name, Arguments: args})
-		if err != nil || r.IsError || r.Content[0].(*mcp.TextContent).Text != tool.Name {
+		if tool.Name == "view_thumbnail" {
+			img, ok := r.Content[0].(*mcp.ImageContent)
+			if err != nil || r.IsError || len(r.Content) != 2 || !ok || !bytes.Equal(img.Data, jpeg) || img.MIMEType != "image/jpeg" || r.Content[1].(*mcp.TextContent).Text != "Preview: image/jpeg, 0.0 KB" {
+				t.Fatalf("%s: %+v, %v", tool.Name, r, err)
+			}
+		} else if err != nil || r.IsError || r.Content[0].(*mcp.TextContent).Text != tool.Name {
 			t.Fatalf("%s: %+v, %v", tool.Name, r, err)
 		}
 		writes := tool.Name == "download_media" || tool.Name == "get_thumbnail" || tool.Name == "mark_read"
@@ -133,7 +150,21 @@ func TestMCPContract(t *testing.T) {
 			t.Errorf("invalid mark_read reached application: %+v", args)
 		}
 	}
-	r, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: "read_messages", Arguments: map[string]any{"groupUrl": "fail"}})
+	for _, args := range []map[string]any{{"groupUrl": "x"}, {"groupUrl": "x", "messageId": 0}, {"groupUrl": "x", "messageId": 1, "maxMB": 1}} {
+		before := calls
+		r, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: "view_thumbnail", Arguments: args})
+		if err == nil && !r.IsError {
+			t.Errorf("invalid view_thumbnail accepted: %+v", args)
+		}
+		if calls != before {
+			t.Errorf("invalid view_thumbnail reached application: %+v", args)
+		}
+	}
+	r, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: "view_thumbnail", Arguments: map[string]any{"groupUrl": "fail", "messageId": 1}})
+	if err != nil || !r.IsError || len(r.Content) != 1 {
+		t.Fatalf("expected view_thumbnail tool error: %+v, %v", r, err)
+	}
+	r, err = cs.CallTool(t.Context(), &mcp.CallToolParams{Name: "read_messages", Arguments: map[string]any{"groupUrl": "fail"}})
 	if err != nil || !r.IsError {
 		t.Fatalf("expected MCP tool error: %+v, %v", r, err)
 	}

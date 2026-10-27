@@ -15,6 +15,7 @@ import (
 	mcpadapter "github.com/adlandh/telegram-mcp/internal/adapter/mcp"
 	"github.com/adlandh/telegram-mcp/internal/app"
 	"github.com/adlandh/telegram-mcp/internal/config"
+	"github.com/adlandh/telegram-mcp/internal/domain"
 	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -209,6 +210,10 @@ type executorFunc func(context.Context, string, app.Arguments) (string, error)
 
 func (f executorFunc) Execute(ctx context.Context, name string, args app.Arguments) (string, error) {
 	return f(ctx, name, args)
+}
+
+func (executorFunc) ViewThumbnail(context.Context, app.Arguments) (domain.Image, error) {
+	return domain.Image{}, errors.New("unused")
 }
 
 var errListenerBroken = errors.New("listener broken")

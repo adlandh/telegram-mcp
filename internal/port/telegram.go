@@ -7,7 +7,7 @@ import (
 )
 
 // Telegram is a user-account port that is read-only except MarkRead, the explicit
-// read acknowledgement. Downloads only write local files.
+// read acknowledgement. Downloads only write local files; Preview writes nothing.
 type Telegram interface {
 	Messages(context.Context, domain.MessageQuery) ([]domain.Message, error)
 	Message(context.Context, string, int) (domain.Message, error)
@@ -16,6 +16,8 @@ type Telegram interface {
 	Folders(context.Context) ([]domain.Folder, error)
 	FolderDialogs(context.Context, int, int) ([]domain.Chat, error)
 	Download(context.Context, string, int, bool, int64) (domain.Download, error)
+	// Preview returns the get_thumbnail preview in memory instead of saving it.
+	Preview(ctx context.Context, chat string, id int, maxBytes int64) (domain.Image, error)
 	// MarkRead marks a chat read up to messageID, or entirely when it is 0.
 	// It returns the chat's marked ID and the read cursor, which is 0 for an empty chat.
 	MarkRead(ctx context.Context, chat string, messageID int) (chatID string, upTo int, err error)
