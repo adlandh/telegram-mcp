@@ -362,6 +362,44 @@ func TestEmbeddedThumbnailFetchesNothing(t *testing.T) {
 	}
 }
 
+func TestPreviewReturnsImageInMemory(t *testing.T) {
+	jpeg := []byte("\xff\xd8\xff\xe0 cached")
+	for name, thumb := range map[string]tg.PhotoSizeClass{
+		"cached":   &tg.PhotoCachedSize{Type: "s", W: 90, H: 90, Bytes: jpeg},
+		"stripped": &tg.PhotoStrippedSize{Type: "i", Bytes: []byte{1, 8, 8, 0xaa}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			c, fetched := downloadClient(t, dir, pdfDoc(1<<30, thumb), false, false)
+			img, err := c.Preview(t.Context(), "chan", 3, 0)
+			if err != nil || *fetched != 0 || img.MIME != "image/jpeg" || len(img.Data) == 0 {
+				t.Fatalf("preview: %q, %v, fetched %d", img.MIME, err, *fetched)
+			}
+			if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+				t.Fatalf("files created: %v", entries)
+			}
+		})
+	}
+	for name, tc := range map[string]struct {
+		thumb     tg.PhotoSizeClass
+		protected bool
+		maxBytes  int64
+	}{
+		"protected": {thumb: &tg.PhotoSize{Type: "m", W: 320, H: 320, Size: 5}, protected: true},
+		"oversized": {thumb: &tg.PhotoSize{Type: "m", W: 320, H: 320, Size: 5}, maxBytes: 2},
+		// The fake transfer streams "hello", which is not an image.
+		"not image": {thumb: &tg.PhotoSize{Type: "m", W: 320, H: 320, Size: 5}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, fetched := downloadClient(t, t.TempDir(), pdfDoc(1<<30, tc.thumb), false, tc.protected)
+			img, err := c.Preview(t.Context(), "chan", 3, tc.maxBytes)
+			if err == nil || img.Data != nil || (name != "not image" && *fetched != 0) {
+				t.Fatalf("preview: %q, %v, fetched %d", img.MIME, err, *fetched)
+			}
+		})
+	}
+}
+
 func TestDownloadHonorsFreshProtection(t *testing.T) {
 	dir := t.TempDir()
 	c, fetched := downloadClient(t, dir, pdfDoc(5), false, true)

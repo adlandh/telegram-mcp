@@ -8,7 +8,7 @@ Provide MCP clients with a locally configured, read-only Telegram user-account s
 
 ### Requirement: Stable MCP tool catalog
 
-The server SHALL expose exactly the following tools and parameter names. Successful results SHALL contain text content. Tool execution failures SHALL be distinguishable from successful results through MCP error semantics.
+The server SHALL expose exactly the following tools and parameter names. Successful results SHALL contain text content; `view_thumbnail` results SHALL also contain one image content item. Tool execution failures SHALL be distinguishable from successful results through MCP error semantics.
 
 | Tool | Required parameters | Optional parameters |
 | --- | --- | --- |
@@ -25,12 +25,13 @@ The server SHALL expose exactly the following tools and parameter names. Success
 | get_media_info | groupUrl, messageId | none |
 | download_media | groupUrl, messageId | maxMB |
 | get_thumbnail | groupUrl, messageId | none |
+| view_thumbnail | groupUrl, messageId | none |
 | mark_read | groupUrl | messageId |
 
 #### Scenario: Discover tools
 
 - **WHEN** an MCP client initializes and requests the tool list
-- **THEN** it receives the 14 tools and their input schemas
+- **THEN** it receives the 15 tools and their input schemas
 - **AND** only `download_media`, `get_thumbnail` and `mark_read` advertise `readOnlyHint=false`, while all tools advertise `destructiveHint=false`
 - **AND** `mark_read` advertises `idempotentHint=true`
 
@@ -38,6 +39,11 @@ The server SHALL expose exactly the following tools and parameter names. Success
 
 - **WHEN** Telegram rejects a valid request
 - **THEN** the corresponding tool returns an MCP tool error rather than a successful text result
+
+#### Scenario: Thumbnail image result
+
+- **WHEN** `view_thumbnail` succeeds
+- **THEN** its result contains one image content item and one text content item
 
 ### Requirement: Validate tool arguments
 

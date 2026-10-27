@@ -3,15 +3,18 @@ package mcp
 
 import (
 	"context"
+	"fmt"
 	"slices"
 
 	"github.com/adlandh/telegram-mcp/internal/app"
+	"github.com/adlandh/telegram-mcp/internal/domain"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // Executor is the application's incoming port.
 type Executor interface {
 	Execute(context.Context, string, app.Arguments) (string, error)
+	ViewThumbnail(context.Context, app.Arguments) (domain.Image, error)
 }
 
 func New(service Executor) *mcp.Server {
@@ -33,6 +36,7 @@ func New(service Executor) *mcp.Server {
 		{"get_media_info", "Inspect media without downloading it.", []string{"groupUrl", "messageId"}, nil},
 		{"download_media", "Download media to a local file. maxMB can only lower the configured limit; 0 or omitted uses it.", []string{"groupUrl", "messageId"}, []string{"maxMB"}},
 		{"get_thumbnail", "Download only a media preview to a local file.", []string{"groupUrl", "messageId"}, nil},
+		{"view_thumbnail", "Return a media preview as an inline image without writing a file; works for remote clients.", []string{"groupUrl", "messageId"}, nil},
 		{"mark_read", "Mark messages as read in Telegram (changes account state). Telegram tracks a read cursor, so messageId marks every message up to and including it; omit it to mark the whole chat read.", []string{"groupUrl"}, []string{"messageId"}},
 	} {
 		properties := map[string]any{}
@@ -63,6 +67,16 @@ func New(service Executor) *mcp.Server {
 		mcp.AddTool(server, &mcp.Tool{Name: def.name, Description: def.description, InputSchema: schema,
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly, IdempotentHint: def.name == "mark_read", DestructiveHint: new(false), OpenWorldHint: new(true)}},
 			func(ctx context.Context, _ *mcp.CallToolRequest, args app.Arguments) (*mcp.CallToolResult, any, error) {
+				if def.name == "view_thumbnail" {
+					img, err := service.ViewThumbnail(ctx, args)
+					if err != nil {
+						return nil, nil, err
+					}
+					return &mcp.CallToolResult{Content: []mcp.Content{
+						&mcp.ImageContent{Data: img.Data, MIMEType: img.MIME},
+						&mcp.TextContent{Text: fmt.Sprintf("Preview: %s, %.1f KB", img.MIME, float64(len(img.Data))/1024)},
+					}}, nil, nil
+				}
 				text, err := service.Execute(ctx, def.name, args)
 				if err != nil {
 					return nil, nil, err

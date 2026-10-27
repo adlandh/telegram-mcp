@@ -38,42 +38,8 @@ func New(telegram port.Telegram, maxDownloadMB int64, timeout time.Duration) *Se
 func (s *Service) Execute(ctx context.Context, name string, a Arguments) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
-	a.GroupURL, a.Query = strings.TrimSpace(a.GroupURL), strings.TrimSpace(a.Query)
-	switch name {
-	case "global_search", "list_dialogs", "list_folders", "list_folder_dialogs":
-	case "read_messages", "search_messages", "get_group_info", "fetch_since", "get_message", "get_pinned", "get_media_info", "download_media", "get_thumbnail", "mark_read":
-		if a.GroupURL == "" {
-			return "", fmt.Errorf("groupUrl is required")
-		}
-	default:
-		return "", fmt.Errorf("unknown tool: %s", name)
-	}
-	if a.Limit != nil && *a.Limit <= 0 {
-		return "", fmt.Errorf("limit must be positive")
-	}
-	if (name == "search_messages" || name == "global_search") && a.Query == "" {
-		return "", fmt.Errorf("query is required")
-	}
-	if name == "fetch_since" && (a.SinceID == nil || *a.SinceID < 0 || *a.SinceID >= 1<<31-1) {
-		return "", fmt.Errorf("sinceId must be between 0 and 2147483646")
-	}
-	// 0 means beforeId was omitted: read from the latest message.
-	if a.BeforeID < 0 || a.BeforeID > 1<<31-1 {
-		return "", fmt.Errorf("beforeId must be between 1 and 2147483647")
-	}
-	if name == "list_folder_dialogs" && (a.FolderID < 2 || a.FolderID > 1<<31-1) {
-		return "", fmt.Errorf("folderId must be between 2 and 2147483647")
-	}
-	switch name {
-	case "get_message", "get_media_info", "download_media", "get_thumbnail":
-		if a.MessageID <= 0 || a.MessageID > 1<<31-1 {
-			return "", fmt.Errorf("messageId must be a positive 32-bit integer")
-		}
-	case "mark_read":
-		// 0 means messageId was omitted: mark the whole chat.
-		if a.MessageID < 0 || a.MessageID > 1<<31-1 {
-			return "", fmt.Errorf("messageId must be a positive 32-bit integer")
-		}
+	if err := validate(name, &a); err != nil {
+		return "", err
 	}
 	limit := func(fallback, maximum int) int {
 		if a.Limit == nil {
@@ -207,6 +173,58 @@ func (s *Service) Execute(ctx context.Context, name string, a Arguments) (string
 		return fmt.Sprintf("Saved: %s\nSize: %.2f MB", file.Path, float64(file.Bytes)/(1024*1024)), nil
 	}
 	return "", fmt.Errorf("unknown tool: %s", name)
+}
+
+// ViewThumbnail returns the get_thumbnail preview in memory without writing a file.
+func (s *Service) ViewThumbnail(ctx context.Context, a Arguments) (domain.Image, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+	if err := validate("view_thumbnail", &a); err != nil {
+		return domain.Image{}, err
+	}
+	return s.telegram.Preview(ctx, a.GroupURL, a.MessageID, s.maxDownloadMB*1024*1024)
+}
+
+// validate trims a's text fields in place and checks them for the named tool.
+func validate(name string, a *Arguments) error {
+	a.GroupURL, a.Query = strings.TrimSpace(a.GroupURL), strings.TrimSpace(a.Query)
+	switch name {
+	case "global_search", "list_dialogs", "list_folders", "list_folder_dialogs":
+	case "read_messages", "search_messages", "get_group_info", "fetch_since", "get_message", "get_pinned", "get_media_info", "download_media", "get_thumbnail", "view_thumbnail", "mark_read":
+		if a.GroupURL == "" {
+			return fmt.Errorf("groupUrl is required")
+		}
+	default:
+		return fmt.Errorf("unknown tool: %s", name)
+	}
+	if a.Limit != nil && *a.Limit <= 0 {
+		return fmt.Errorf("limit must be positive")
+	}
+	if (name == "search_messages" || name == "global_search") && a.Query == "" {
+		return fmt.Errorf("query is required")
+	}
+	if name == "fetch_since" && (a.SinceID == nil || *a.SinceID < 0 || *a.SinceID >= 1<<31-1) {
+		return fmt.Errorf("sinceId must be between 0 and 2147483646")
+	}
+	// 0 means beforeId was omitted: read from the latest message.
+	if a.BeforeID < 0 || a.BeforeID > 1<<31-1 {
+		return fmt.Errorf("beforeId must be between 1 and 2147483647")
+	}
+	if name == "list_folder_dialogs" && (a.FolderID < 2 || a.FolderID > 1<<31-1) {
+		return fmt.Errorf("folderId must be between 2 and 2147483647")
+	}
+	switch name {
+	case "get_message", "get_media_info", "download_media", "get_thumbnail", "view_thumbnail":
+		if a.MessageID <= 0 || a.MessageID > 1<<31-1 {
+			return fmt.Errorf("messageId must be a positive 32-bit integer")
+		}
+	case "mark_read":
+		// 0 means messageId was omitted: mark the whole chat.
+		if a.MessageID < 0 || a.MessageID > 1<<31-1 {
+			return fmt.Errorf("messageId must be a positive 32-bit integer")
+		}
+	}
+	return nil
 }
 
 func optional(n *int) string {

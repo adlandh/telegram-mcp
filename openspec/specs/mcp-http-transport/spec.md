@@ -23,7 +23,7 @@ The command `telegram-mcp http` SHALL serve MCP over the Streamable HTTP transpo
 #### Scenario: HTTP mode serves the tool catalog
 
 - **WHEN** `telegram-mcp http` runs with a valid token and an authorized session
-- **THEN** an authenticated MCP client connecting to `/mcp` can initialize and list the same 14 tools as over stdio
+- **THEN** an authenticated MCP client connecting to `/mcp` can initialize and list the same 15 tools as over stdio
 
 #### Scenario: Extra HTTP arguments are rejected
 

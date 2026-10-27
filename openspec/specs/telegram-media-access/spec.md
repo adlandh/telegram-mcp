@@ -58,14 +58,49 @@ Inspect Telegram message media and safely save full files or lightweight preview
 - **WHEN** no suitable preview exists
 - **THEN** `get_thumbnail` returns an error without transferring the full file
 
+### Requirement: Inline thumbnail images
+
+`view_thumbnail` SHALL return the same preview that `get_thumbnail` would select, as MCP image content with base64 data and a MIME type detected from the preview bytes, plus one text block that states the MIME type and size. It SHALL NOT create files. The configured size limit SHALL apply to the preview bytes. If no suitable preview exists, the tool SHALL return an error.
+
+#### Scenario: Remote client receives preview bytes
+
+- **WHEN** an MCP client calls `view_thumbnail` for a video message that has an 18 KiB JPEG preview
+- **THEN** the result contains image content with MIME type `image/jpeg` and the preview bytes
+- **AND** the full video is not transferred and no file is created in `TELEGRAM_DOWNLOAD_DIR`
+
+#### Scenario: Stripped thumbnail is returned inline
+
+- **WHEN** a message has only an embedded stripped thumbnail
+- **THEN** `view_thumbnail` returns the expanded JPEG as image content without a network transfer
+
+#### Scenario: Inline preview is unavailable
+
+- **WHEN** no suitable preview exists
+- **THEN** `view_thumbnail` returns an error and no image content
+
+#### Scenario: Inline preview exceeds the configured limit
+
+- **WHEN** the preview is larger than the configured `TELEGRAM_MAX_DOWNLOAD_MB` limit
+- **THEN** `view_thumbnail` returns an error and no image content
+
+#### Scenario: File-based thumbnail stays compatible
+
+- **WHEN** a client calls `get_thumbnail` for the same message
+- **THEN** it still saves a file and returns its server path and size as text
+
 ### Requirement: Respect protected content
 
-Both download tools SHALL reject media when the resolved chat or target message restricts saving with a no-forward flag. Missing messages, unavailable media, and unsupported payload types SHALL yield descriptive failures rather than successful empty files.
+`download_media`, `get_thumbnail` and `view_thumbnail` SHALL reject media when the resolved chat or target message restricts saving with a no-forward flag. Missing messages, unavailable media, and unsupported payload types SHALL yield descriptive failures rather than successful empty files or empty images.
 
 #### Scenario: Protected channel media is not saved
 
 - **WHEN** media belongs to a protected channel or message
 - **THEN** neither download tool creates a file
+
+#### Scenario: Protected channel preview is not returned inline
+
+- **WHEN** media belongs to a protected channel or message
+- **THEN** `view_thumbnail` returns an error and no image content
 
 ### Requirement: Private and isolated local files
 

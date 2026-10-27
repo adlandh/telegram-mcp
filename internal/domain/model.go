@@ -41,3 +41,8 @@ type Download struct {
 	Path  string
 	Bytes int64
 }
+
+type Image struct {
+	Data []byte
+	MIME string
+}
