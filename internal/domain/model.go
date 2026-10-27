@@ -20,9 +20,9 @@ type Media struct {
 }
 
 type MessageQuery struct {
-	Chat, Search          string
-	Limit, SinceID        int
-	Since, Pinned, Global bool
+	Chat, Search             string
+	Limit, SinceID, BeforeID int
+	Since, Pinned, Global    bool
 }
 
 type Chat struct {

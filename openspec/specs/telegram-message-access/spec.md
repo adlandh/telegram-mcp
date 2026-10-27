@@ -32,7 +32,7 @@ Chat-scoped tools SHALL accept usernames with or without `@`, `t.me` username li
 
 ### Requirement: Read and search bounded message sets
 
-`read_messages` SHALL select recent messages, `search_messages` SHALL search the specified chat, `get_pinned` SHALL select pinned messages, and `global_search` SHALL search across chats visible to the account. Defaults and caps SHALL follow this table; positive limits above the cap SHALL be clamped. Chat-scoped results SHALL be presented in ascending message-ID order. Global results SHALL include the originating chat title and marked ID. Empty selections SHALL return explanatory text.
+`read_messages` SHALL select recent messages, `search_messages` SHALL search the specified chat, `get_pinned` SHALL select pinned messages, and `global_search` SHALL search across chats visible to the account. Defaults and caps SHALL follow this table; positive limits above the cap SHALL be clamped. Chat-scoped results SHALL be presented in ascending message-ID order. Global results SHALL include the originating chat title and marked ID. Empty selections SHALL return explanatory text. `read_messages` and `search_messages` SHALL accept an optional `beforeId`; when present, they SHALL select the newest matching messages with IDs strictly lower than `beforeId`, and when omitted they SHALL select the newest matching messages.
 
 | Tool | Default limit | Maximum limit |
 | --- | --- | --- |
@@ -56,6 +56,11 @@ Chat-scoped tools SHALL accept usernames with or without `@`, `t.me` username li
 
 - **WHEN** a global search returns messages from multiple chats
 - **THEN** every result includes the originating chat title and marked ID
+
+#### Scenario: beforeId selects strictly older messages
+
+- **WHEN** a caller calls `read_messages` or `search_messages` with `beforeId=500` and `limit=50`
+- **THEN** the response contains only messages with IDs below 500, the newest matching ones first selected, presented in ascending message-ID order
 
 ### Requirement: Preserve message metadata
 
@@ -94,6 +99,35 @@ Message output SHALL include message ID, UTC timestamp to the second, available 
 
 - **WHEN** no messages are available after `sinceId`
 - **THEN** the response has `maxId` equal to `sinceId`
+
+### Requirement: Backward history pagination without gaps
+
+Non-empty `read_messages` and `search_messages` responses SHALL include `nextBeforeId`, equal to the smallest returned message ID. Repeated calls that pass it as `beforeId` SHALL return every available matching message exactly once, across ID gaps, service messages and Telegram page boundaries. An empty selection SHALL return explanatory text without `nextBeforeId`. `beforeId` SHALL be an integer from 1 to 2147483647; other values SHALL be rejected without calling Telegram.
+
+#### Scenario: Walk the whole history backward
+
+- **WHEN** a chat has more messages than one response, with ID gaps and service messages, and a caller starts without `beforeId` and repeats with each returned `nextBeforeId` until the response is empty
+- **THEN** the concatenated results contain every available message exactly once
+
+#### Scenario: Walk all search hits backward
+
+- **WHEN** a chat search matches more messages than one response and a caller repeats `search_messages` with each returned `nextBeforeId`
+- **THEN** every matching message is returned exactly once
+
+#### Scenario: Cursor excludes overlap
+
+- **WHEN** a caller passes the previous `nextBeforeId` as `beforeId`
+- **THEN** the message with that ID is not returned again
+
+#### Scenario: Start of history ends pagination
+
+- **WHEN** no messages older than `beforeId` match
+- **THEN** the response returns explanatory text and no `nextBeforeId`
+
+#### Scenario: Invalid beforeId is rejected
+
+- **WHEN** a caller passes `beforeId` of 0, a negative number, a non-integer, or a value above 2147483647
+- **THEN** the call fails without contacting Telegram
 
 ### Requirement: Discover chats and folders
 

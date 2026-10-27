@@ -84,6 +84,29 @@ func TestMCPContract(t *testing.T) {
 			t.Errorf("invalid folder request reached application: %+v", args)
 		}
 	}
+	for _, name := range []string{"read_messages", "search_messages"} {
+		args := func(before any) map[string]any {
+			a := map[string]any{"groupUrl": "x", "beforeId": before}
+			if name == "search_messages" {
+				a["query"] = "q"
+			}
+			return a
+		}
+		r, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: name, Arguments: args(5)})
+		if err != nil || r.IsError {
+			t.Errorf("valid %s beforeId rejected: %+v, %v", name, r, err)
+		}
+		for _, before := range []any{0, -1, 1.5, 2147483648} {
+			calls0 := calls
+			r, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: name, Arguments: args(before)})
+			if err == nil && !r.IsError {
+				t.Errorf("invalid %s beforeId accepted: %v", name, before)
+			}
+			if calls != calls0 {
+				t.Errorf("invalid %s beforeId reached application: %v", name, before)
+			}
+		}
+	}
 	for _, args := range []map[string]any{{}, {"groupUrl": "x", "limit": 1.5}, {"groupUrl": "x", "limit": -1}, {"groupUrl": "x", "unexpected": true}, {"groupUrl": 123}} {
 		before := calls
 		r, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: "read_messages", Arguments: args})

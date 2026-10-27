@@ -216,8 +216,8 @@ Defaults and maximums are listed below. Numeric parameters are integers; chat ID
 
 | Tool | Required parameters | Optional parameters |
 | --- | --- | --- |
-| `read_messages` | `groupUrl` | `limit`: 50, maximum 200 |
-| `search_messages` | `groupUrl`, `query` | `limit`: 30, maximum 100 |
+| `read_messages` | `groupUrl` | `limit`: 50, maximum 200; `beforeId`: only older messages |
+| `search_messages` | `groupUrl`, `query` | `limit`: 30, maximum 100; `beforeId`: only older matches |
 | `fetch_since` | `groupUrl`, `sinceId` | `limit`: 100, maximum 200 |
 | `get_message` | `groupUrl`, `messageId` | — |
 | `global_search` | `query` | `limit`: 30, maximum 100 |
@@ -244,6 +244,8 @@ Numeric parameters must be integers. `archived=true` selects only the archive; `
 `read_messages`, `search_messages`, and `get_pinned` sort selected messages by ascending ID. `[album:...]` preserves the full 64-bit ID as a string; `[reply:...]` connects replies. `get_message` adds views, forwards, reactions, and reply count.
 
 `fetch_since` returns the earliest messages after `sinceId`; use its `maxId` as the next `sinceId` until results are empty. Reaching `limit` never skips backlog.
+
+To walk older history, call `read_messages` or `search_messages` without `beforeId`, then pass each returned `nextBeforeId` (the smallest ID in the page) as `beforeId`. Repeat until the response is empty; that response has no cursor. `beforeId` is exclusive, so pages never overlap or skip messages.
 
 ### Media and local files
 

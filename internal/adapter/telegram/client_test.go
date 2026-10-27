@@ -61,47 +61,62 @@ func TestFoldersExposeIDs(t *testing.T) {
 	}
 }
 
-func TestHistoryPaginationDoesNotLoseBacklog(t *testing.T) {
-	// Model Telegram's descending IDs, offset_id + add_offset slicing and min_id
-	// post-filtering. Includes ID gaps and more than one server page.
+// historyClient models Telegram's descending IDs, offset_id + add_offset slicing
+// and min_id post-filtering for history and chat search, where every message matches.
+func historyClient(history []int) *Client {
+	return &Client{api: tg.NewClient(invokeFunc(func(_ context.Context, in bin.Encoder, out bin.Decoder) error {
+		var offsetID, addOffset, limit, minID int
+		switch req := in.(type) {
+		case *tg.ContactsResolveUsernameRequest:
+			*out.(*tg.ContactsResolvedPeer) = tg.ContactsResolvedPeer{Peer: &tg.PeerChannel{ChannelID: 1}, Chats: []tg.ChatClass{&tg.Channel{ID: 1, AccessHash: 2, Title: "test"}}}
+			return nil
+		case *tg.MessagesGetHistoryRequest:
+			offsetID, addOffset, limit, minID = req.OffsetID, req.AddOffset, req.Limit, req.MinID
+		case *tg.MessagesSearchRequest:
+			offsetID, limit = req.OffsetID, req.Limit
+		default:
+			return fmt.Errorf("unexpected request %T", in)
+		}
+		start := 0
+		if offsetID > 0 {
+			start = len(history)
+			for i, id := range history {
+				if id < offsetID {
+					start = i
+					break
+				}
+			}
+		}
+		start = max(0, start+addOffset)
+		var messages []tg.MessageClass
+		for _, id := range history[start:min(start+limit, len(history))] {
+			if id > minID {
+				if id%9 == 0 {
+					messages = append(messages, &tg.MessageService{ID: id, PeerID: &tg.PeerChannel{ChannelID: 1}, Action: &tg.MessageActionPinMessage{}})
+				} else {
+					messages = append(messages, &tg.Message{ID: id, PeerID: &tg.PeerChannel{ChannelID: 1}, Message: fmt.Sprint(id)})
+				}
+			}
+		}
+		out.(*tg.MessagesMessagesBox).Messages = &tg.MessagesChannelMessages{Messages: messages}
+		return nil
+	}))}
+}
+
+// gappedHistory returns descending IDs with gaps, spanning several server pages.
+func gappedHistory() []int {
 	var history []int
 	for id := 400; id > 0; id-- {
 		if id%7 != 0 {
 			history = append(history, id)
 		}
 	}
-	c := &Client{api: tg.NewClient(invokeFunc(func(_ context.Context, in bin.Encoder, out bin.Decoder) error {
-		switch req := in.(type) {
-		case *tg.ContactsResolveUsernameRequest:
-			*out.(*tg.ContactsResolvedPeer) = tg.ContactsResolvedPeer{Peer: &tg.PeerChannel{ChannelID: 1}, Chats: []tg.ChatClass{&tg.Channel{ID: 1, AccessHash: 2, Title: "test"}}}
-		case *tg.MessagesGetHistoryRequest:
-			start := 0
-			if req.OffsetID > 0 {
-				start = len(history)
-				for i, id := range history {
-					if id < req.OffsetID {
-						start = i
-						break
-					}
-				}
-			}
-			start = max(0, start+req.AddOffset)
-			var messages []tg.MessageClass
-			for _, id := range history[start:min(start+req.Limit, len(history))] {
-				if id > req.MinID {
-					if id%9 == 0 {
-						messages = append(messages, &tg.MessageService{ID: id, PeerID: &tg.PeerChannel{ChannelID: 1}, Action: &tg.MessageActionPinMessage{}})
-					} else {
-						messages = append(messages, &tg.Message{ID: id, PeerID: &tg.PeerChannel{ChannelID: 1}, Message: fmt.Sprint(id)})
-					}
-				}
-			}
-			out.(*tg.MessagesMessagesBox).Messages = &tg.MessagesChannelMessages{Messages: messages}
-		default:
-			return fmt.Errorf("unexpected request %T", in)
-		}
-		return nil
-	}))}
+	return history
+}
+
+func TestHistoryPaginationDoesNotLoseBacklog(t *testing.T) {
+	history := gappedHistory()
+	c := historyClient(history)
 	var got []int
 	cursor := 0
 	for range 5 {
@@ -128,6 +143,34 @@ func TestHistoryPaginationDoesNotLoseBacklog(t *testing.T) {
 	msgs, err := c.Messages(t.Context(), domain.MessageQuery{Chat: "test", Limit: 200})
 	if err != nil || len(msgs) != 200 || msgs[0].ID != history[0] || msgs[199].ID != history[199] {
 		t.Fatalf("recent pagination: %d messages, %v", len(msgs), err)
+	}
+}
+
+func TestBackwardPaginationDoesNotLoseHistory(t *testing.T) {
+	history := gappedHistory()
+	c := historyClient(history)
+	for _, search := range []string{"", "hit"} {
+		var got []int
+		before := 0
+		for range 10 {
+			msgs, err := c.Messages(t.Context(), domain.MessageQuery{Chat: "test", Search: search, BeforeID: before, Limit: 150})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(msgs) == 0 {
+				break
+			}
+			for _, m := range msgs {
+				if before > 0 && m.ID >= before {
+					t.Fatalf("search %q: id %d not below beforeId %d", search, m.ID, before)
+				}
+				got = append(got, m.ID)
+			}
+			before = slices.MinFunc(msgs, func(a, b domain.Message) int { return a.ID - b.ID }).ID
+		}
+		if !slices.Equal(got, history) {
+			t.Fatalf("search %q: lost or duplicated messages: got %d, want %d; last beforeId %d", search, len(got), len(history), before)
+		}
 	}
 }
 

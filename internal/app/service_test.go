@@ -27,6 +27,7 @@ type fakeTelegram struct {
 	markCalls   int
 	markUpTo    int
 	markErr     error
+	noMessages  bool
 }
 
 func (f *fakeTelegram) MarkRead(_ context.Context, chat string, messageID int) (string, int, error) {
@@ -45,6 +46,9 @@ func (f *fakeTelegram) FolderDialogs(_ context.Context, id, limit int) ([]domain
 func (f *fakeTelegram) Messages(ctx context.Context, q domain.MessageQuery) ([]domain.Message, error) {
 	f.query = q
 	_, f.deadline = ctx.Deadline()
+	if f.noMessages {
+		return nil, nil
+	}
 	return []domain.Message{{ID: 12, Text: "second", AlbumID: "14285256815022453", ReplyTo: 11}, {ID: 11, Text: "first"}}, nil
 }
 
@@ -81,6 +85,47 @@ func TestMessageOrderingLimitsAndMetadata(t *testing.T) {
 	}
 }
 
+func TestBackwardCursor(t *testing.T) {
+	f := &fakeTelegram{}
+	s := New(f, 200, time.Minute)
+	for _, name := range []string{"read_messages", "search_messages"} {
+		text, err := s.Execute(t.Context(), name, Arguments{GroupURL: "@test", Query: "q", BeforeID: 100})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if f.query.BeforeID != 100 {
+			t.Errorf("%s: beforeId not passed: %+v", name, f.query)
+		}
+		header, _, _ := strings.Cut(text, "\n")
+		if !strings.Contains(header, "nextBeforeId=11") {
+			t.Errorf("%s: missing cursor: %s", name, text)
+		}
+	}
+	for _, name := range []string{"fetch_since", "get_pinned", "global_search"} {
+		if _, err := s.Execute(t.Context(), name, Arguments{GroupURL: "@test", Query: "q", SinceID: new(0), BeforeID: 100}); err != nil {
+			t.Fatal(err)
+		}
+		if f.query.BeforeID != 0 {
+			t.Errorf("%s: beforeId leaked: %+v", name, f.query)
+		}
+	}
+	f.noMessages = true
+	for _, tc := range []struct {
+		name   string
+		before int
+		want   string
+	}{
+		{"read_messages", 100, "(no older messages)"},
+		{"read_messages", 0, "(no messages)"},
+		{"search_messages", 100, "Found 0 messages for \"q\":\n(none)"},
+	} {
+		text, err := s.Execute(t.Context(), tc.name, Arguments{GroupURL: "@test", Query: "q", BeforeID: tc.before})
+		if err != nil || text != tc.want {
+			t.Errorf("%s beforeId=%d: %q, %v", tc.name, tc.before, text, err)
+		}
+	}
+}
+
 func TestRejectInvalidArgumentsBeforeCallingTelegram(t *testing.T) {
 	s := New(nil, 200, time.Minute)
 	for _, tc := range []struct {
@@ -92,6 +137,8 @@ func TestRejectInvalidArgumentsBeforeCallingTelegram(t *testing.T) {
 		{"search_messages", Arguments{GroupURL: "x", Query: "  "}},
 		{"fetch_since", Arguments{GroupURL: "x"}},
 		{"fetch_since", Arguments{GroupURL: "x", SinceID: new(-1)}},
+		{"read_messages", Arguments{GroupURL: "x", BeforeID: -1}},
+		{"search_messages", Arguments{GroupURL: "x", Query: "q", BeforeID: 1 << 31}},
 		{"list_folder_dialogs", Arguments{}},
 		{"list_folder_dialogs", Arguments{FolderID: 1}},
 		{"list_folder_dialogs", Arguments{FolderID: 1 << 31}},
