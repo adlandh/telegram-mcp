@@ -29,7 +29,7 @@ func New(service Executor) *mcp.Server {
 		{"fetch_since", "Read messages newer than sinceId, oldest first, with a safe next maxId cursor (default 100, max 200). maxTextChars truncates each text, marked [truncated]; get_message returns it in full.", []string{"groupUrl", "sinceId"}, []string{"limit", "maxTextChars"}},
 		{"get_message", "Get a message and its engagement, album, reply and media metadata.", []string{"groupUrl", "messageId"}, nil},
 		{"global_search", "Search messages across all chats (default 30, max 100). maxTextChars truncates each text, marked [truncated]; get_message returns it in full.", []string{"query"}, []string{"limit", "maxTextChars"}},
-		{"list_dialogs", "List chats with marked IDs and unread counts (default 100, max 500). archived=true selects archived chats only, matching the original service.", nil, []string{"limit", "archived"}},
+		{"list_dialogs", "List chats with marked IDs and unread counts (default 100, max 500). archived=true selects archived chats only; false selects the main list.", nil, []string{"limit", "archived"}},
 		{"list_folders", "List configured Telegram chat folders.", nil, nil},
 		{"list_folder_dialogs", "List chats in a custom folder by folderId from list_folders (default 100, max 500).", []string{"folderId"}, []string{"limit"}},
 		{"get_pinned", "Read pinned messages (default 20, max 50). maxTextChars truncates each text, marked [truncated]; get_message returns it in full.", []string{"groupUrl"}, []string{"limit", "maxTextChars"}},

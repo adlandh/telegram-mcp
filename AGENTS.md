@@ -14,7 +14,7 @@ Run from the repository root with Go 1.26+ and golangci-lint v2:
 - Single package: `go test -race -count=1 ./internal/app`.
 - Single test: `go test -race -count=1 ./internal/adapter/telegram -run '^TestHistoryPaginationDoesNotLoseBacklog$'`.
 - MCP schemas, handshake and tool calls: `go test -race ./internal/adapter/mcp -run '^TestMCPContract$'`.
-- Run `task test`, `task lint` and `task build` after meaningful changes.
+- Run `task test`, `task lint` and `task build` after meaningful changes. CI runs the same checks plus `govulncheck` on pull requests and pushes to `main`.
 
 ## Hexagonal architecture
 
@@ -30,6 +30,8 @@ Run from the repository root with Go 1.26+ and golangci-lint v2:
 - This is a personal-account MTProto client using gotd/td and the official Go MCP SDK, not a Bot API service.
 - Telegram tools are read-only except the explicit `mark_read` tool. Never add sends, edits, joins or read acknowledgements as incidental behavior.
 - `download_media` and `get_thumbnail` write local files and `mark_read` changes Telegram read state; all three must retain their non-read-only MCP annotations.
+- `view_thumbnail` returns the preview as inline MCP image content, writes no file and stays read-only.
+- `maxTextChars` truncates texts only in `read_messages`, `search_messages`, `fetch_since`, `get_pinned` and `global_search`; `get_message` always returns the full text.
 - Preserve tool/parameter names, including camelCase keys such as `groupUrl`, `sinceId`, `beforeId` and `maxTextChars`. Numeric chat IDs are strings; numeric parameters are integers.
 - `archived=true` selects only archived dialogs, not main plus archived.
 - `fetch_since` must return the earliest messages after `sinceId` with a safe `maxId` cursor; do not skip backlog when the limit is reached.
@@ -43,5 +45,7 @@ Run from the repository root with Go 1.26+ and golangci-lint v2:
 - Normal startup requires API ID/hash and a saved gotd session; `TELEGRAM_PHONE` is setup-only. GramJS string sessions are incompatible.
 - Use the same OS user/session path for setup and the MCP client, with one server process per session. Relative paths resolve from the process working directory.
 - stdout belongs to MCP. Diagnostics and setup prompts go to stderr.
+- Session writes must stay atomic (temp file, fsync, rename) so a failed write keeps the previous session.
+- `telegram-mcp http` must cancel and drain in-flight tool calls on every exit before the Telegram client stops, so download cleanup completes.
 - Offline tests do not validate real authorization or Telegram access; those require an explicit manual check after setup.
 - Do not commit credentials, session files or downloaded Telegram content.
