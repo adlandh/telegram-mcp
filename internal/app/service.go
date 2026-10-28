@@ -23,6 +23,8 @@ type Arguments struct {
 	FolderID  int    `json:"folderId,omitempty"`
 	Archived  bool   `json:"archived,omitempty"`
 	MaxMB     *int64 `json:"maxMB,omitempty"`
+	// MaxTextChars caps each listed message's text in runes; 0 means no cap.
+	MaxTextChars int `json:"maxTextChars,omitempty"`
 }
 
 type Service struct {
@@ -72,6 +74,9 @@ func (s *Service) Execute(ctx context.Context, name string, a Arguments) (string
 		lines := make([]string, 0, len(msgs))
 		maxID := q.SinceID
 		for _, m := range msgs {
+			if r := []rune(m.Text); a.MaxTextChars > 0 && len(r) > a.MaxTextChars {
+				m.Text = string(r[:a.MaxTextChars]) + " [truncated]"
+			}
 			line := formatMessage(m)
 			if q.Global {
 				line = fmt.Sprintf("(%s [id:%s]) %s", m.Chat, m.ChatID, line)
@@ -199,6 +204,9 @@ func validate(name string, a *Arguments) error {
 	}
 	if a.Limit != nil && *a.Limit <= 0 {
 		return fmt.Errorf("limit must be positive")
+	}
+	if a.MaxTextChars < 0 {
+		return fmt.Errorf("maxTextChars must be positive")
 	}
 	if (name == "search_messages" || name == "global_search") && a.Query == "" {
 		return fmt.Errorf("query is required")
