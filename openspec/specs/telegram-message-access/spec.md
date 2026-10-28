@@ -129,6 +129,45 @@ Non-empty `read_messages` and `search_messages` responses SHALL include `nextBef
 - **WHEN** a caller passes `beforeId` of 0, a negative number, a non-integer, or a value above 2147483647
 - **THEN** the call fails without contacting Telegram
 
+### Requirement: Optional text truncation in message lists
+
+`read_messages`, `search_messages`, `fetch_since`, `get_pinned` and `global_search` SHALL accept an optional integer `maxTextChars` of at least 1. When set, message text longer than `maxTextChars` Unicode code points SHALL be cut to that many code points followed by ` [truncated]`; shorter text and the no-text placeholder SHALL be unchanged. Omission SHALL leave text untruncated. `get_message` SHALL always return full text. Invalid values SHALL be rejected without calling Telegram.
+
+#### Scenario: Long text is truncated with a marker
+
+- **WHEN** a caller calls `read_messages` with `maxTextChars=10` and a message text is `Hello, wonderful world`
+- **THEN** that message's text in the output is `Hello, won [truncated]` and its ID, timestamp, sender, media, reply and album references are preserved
+
+#### Scenario: Short text is unchanged
+
+- **WHEN** a caller sets `maxTextChars=10` and a message text has 10 or fewer code points
+- **THEN** the text is returned unchanged without a marker
+
+#### Scenario: Characters are counted as code points
+
+- **WHEN** a caller sets `maxTextChars=3` and a message text is `Привет`
+- **THEN** the text in the output is `При [truncated]` and remains valid UTF-8
+
+#### Scenario: Omitted limit keeps full text
+
+- **WHEN** a caller omits `maxTextChars`
+- **THEN** every message text is returned in full, identical to the output without this parameter
+
+#### Scenario: Truncated lines cannot impersonate messages
+
+- **WHEN** a multi-line text is truncated
+- **THEN** its continuation lines remain indented and the marker follows the kept text
+
+#### Scenario: Full text remains available
+
+- **WHEN** a list response shows a message as truncated and the caller calls `get_message` with its ID
+- **THEN** `get_message` returns the complete text
+
+#### Scenario: Invalid maxTextChars is rejected
+
+- **WHEN** a caller passes `maxTextChars` of 0, a negative number or a non-integer
+- **THEN** the call fails without contacting Telegram
+
 ### Requirement: Discover chats and folders
 
 `list_dialogs` SHALL expose chat type, title, available username, unread count, and marked string ID, with default limit 100 and cap 500. `archived=false` or omission SHALL select the main dialog list; `archived=true` SHALL select only archived dialogs. `get_group_info` SHALL expose title, ID, type, available username, description, and member count when available. `list_folders` SHALL expose named custom folders with their integer filter IDs and explicitly included peer counts, where pinned peers count as explicitly included, excluding the built-in default filter. Counts SHALL be labeled as explicitly included peers, not total computed folder membership.

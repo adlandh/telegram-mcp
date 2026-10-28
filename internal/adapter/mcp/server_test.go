@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/adlandh/telegram-mcp/internal/app"
@@ -122,6 +123,18 @@ func TestMCPContract(t *testing.T) {
 			if calls != calls0 {
 				t.Errorf("invalid %s beforeId reached application: %v", name, before)
 			}
+		}
+	}
+	for _, tool := range tools.Tools {
+		if _, ok := tool.InputSchema.(map[string]any)["properties"].(map[string]any)["maxTextChars"]; ok != slices.Contains([]string{"read_messages", "search_messages", "fetch_since", "get_pinned", "global_search"}, tool.Name) {
+			t.Errorf("%s: unexpected maxTextChars presence %t", tool.Name, ok)
+		}
+	}
+	for _, limit := range []any{500, 0, -1, 1.5} {
+		before := calls
+		r, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: "read_messages", Arguments: map[string]any{"groupUrl": "x", "maxTextChars": limit}})
+		if valid := limit == 500; valid != (err == nil && !r.IsError) || valid != (calls != before) {
+			t.Errorf("maxTextChars %v: valid=%t, result %+v, %v", limit, valid, r, err)
 		}
 	}
 	for _, args := range []map[string]any{{}, {"groupUrl": "x", "limit": 1.5}, {"groupUrl": "x", "limit": -1}, {"groupUrl": "x", "unexpected": true}, {"groupUrl": 123}} {

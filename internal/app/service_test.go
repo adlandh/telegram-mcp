@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/adlandh/telegram-mcp/internal/domain"
 	"github.com/adlandh/telegram-mcp/internal/port"
@@ -29,6 +30,7 @@ type fakeTelegram struct {
 	markErr     error
 	noMessages  bool
 	previewErr  error
+	msgs        []domain.Message
 }
 
 func (f *fakeTelegram) MarkRead(_ context.Context, chat string, messageID int) (string, int, error) {
@@ -49,6 +51,9 @@ func (f *fakeTelegram) Messages(ctx context.Context, q domain.MessageQuery) ([]d
 	_, f.deadline = ctx.Deadline()
 	if f.noMessages {
 		return nil, nil
+	}
+	if f.msgs != nil {
+		return f.msgs, nil
 	}
 	return []domain.Message{{ID: 12, Text: "second", AlbumID: "14285256815022453", ReplyTo: 11}, {ID: 11, Text: "first"}}, nil
 }
@@ -145,6 +150,7 @@ func TestRejectInvalidArgumentsBeforeCallingTelegram(t *testing.T) {
 		{"fetch_since", Arguments{GroupURL: "x"}},
 		{"fetch_since", Arguments{GroupURL: "x", SinceID: new(-1)}},
 		{"read_messages", Arguments{GroupURL: "x", BeforeID: -1}},
+		{"read_messages", Arguments{GroupURL: "x", MaxTextChars: -1}},
 		{"search_messages", Arguments{GroupURL: "x", Query: "q", BeforeID: 1 << 31}},
 		{"list_folder_dialogs", Arguments{}},
 		{"list_folder_dialogs", Arguments{FolderID: 1}},
@@ -233,6 +239,50 @@ func TestFolderDialogsDispatch(t *testing.T) {
 	got, err = s.Execute(t.Context(), "list_folder_dialogs", Arguments{FolderID: 2})
 	if err == nil || got != "" {
 		t.Fatalf("folder error: %q, %v", got, err)
+	}
+}
+
+func (f *fakeTelegram) Message(context.Context, string, int) (domain.Message, error) {
+	return f.msgs[0], nil
+}
+
+func TestMaxTextChars(t *testing.T) {
+	f := &fakeTelegram{msgs: []domain.Message{
+		{ID: 1, Text: "Hello, wonderful world", ReplyTo: 9, AlbumID: "7"},
+		{ID: 2, Text: "exactly10!"},
+		{ID: 3, Text: "Привет"},
+		{ID: 4, Text: "line one\n#999 fake\nline three"},
+		{ID: 5},
+	}}
+	s := New(f, 200, time.Minute)
+	full, err := s.Execute(t.Context(), "read_messages", Arguments{GroupURL: "@test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(full, "[truncated]") || !strings.Contains(full, "Hello, wonderful world") {
+		t.Fatalf("omitted maxTextChars truncated: %s", full)
+	}
+	for _, name := range []string{"read_messages", "search_messages", "fetch_since", "get_pinned", "global_search"} {
+		text, err := s.Execute(t.Context(), name, Arguments{GroupURL: "@test", Query: "q", SinceID: new(0), MaxTextChars: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{"Hello, won [truncated] [reply:9] [album:7]", "exactly10!\n", "Привет\n", "line one\n  # [truncated]\n", "[no text]"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("%s: missing %q: %s", name, want, text)
+			}
+		}
+	}
+	text, err := s.Execute(t.Context(), "read_messages", Arguments{GroupURL: "@test", MaxTextChars: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(text, "При [truncated]") || !utf8.ValidString(text) {
+		t.Fatalf("rune truncation: %s", text)
+	}
+	text, err = s.Execute(t.Context(), "get_message", Arguments{GroupURL: "@test", MessageID: 1, MaxTextChars: 3})
+	if err != nil || !strings.Contains(text, "Hello, wonderful world") || strings.Contains(text, "[truncated]") {
+		t.Fatalf("get_message truncated: %q, %v", text, err)
 	}
 }
 

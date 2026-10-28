@@ -23,16 +23,16 @@ func New(service Executor) *mcp.Server {
 		name, description  string
 		required, optional []string
 	}{
-		{"read_messages", "Read recent messages, including album and reply links (default 50, max 200). Pass the returned nextBeforeId as beforeId to page back through older history until empty.", []string{"groupUrl"}, []string{"limit", "beforeId"}},
-		{"search_messages", "Search within a chat (default 30, max 100). Pass the returned nextBeforeId as beforeId to page back through older matches until empty.", []string{"groupUrl", "query"}, []string{"limit", "beforeId"}},
+		{"read_messages", "Read recent messages, including album and reply links (default 50, max 200). Pass the returned nextBeforeId as beforeId to page back through older history until empty. maxTextChars truncates each text, marked [truncated]; get_message returns it in full.", []string{"groupUrl"}, []string{"limit", "beforeId", "maxTextChars"}},
+		{"search_messages", "Search within a chat (default 30, max 100). Pass the returned nextBeforeId as beforeId to page back through older matches until empty. maxTextChars truncates each text, marked [truncated]; get_message returns it in full.", []string{"groupUrl", "query"}, []string{"limit", "beforeId", "maxTextChars"}},
 		{"get_group_info", "Get chat title, ID, username, member count and description.", []string{"groupUrl"}, nil},
-		{"fetch_since", "Read messages newer than sinceId, oldest first, with a safe next maxId cursor (default 100, max 200).", []string{"groupUrl", "sinceId"}, []string{"limit"}},
+		{"fetch_since", "Read messages newer than sinceId, oldest first, with a safe next maxId cursor (default 100, max 200). maxTextChars truncates each text, marked [truncated]; get_message returns it in full.", []string{"groupUrl", "sinceId"}, []string{"limit", "maxTextChars"}},
 		{"get_message", "Get a message and its engagement, album, reply and media metadata.", []string{"groupUrl", "messageId"}, nil},
-		{"global_search", "Search messages across all chats (default 30, max 100).", []string{"query"}, []string{"limit"}},
+		{"global_search", "Search messages across all chats (default 30, max 100). maxTextChars truncates each text, marked [truncated]; get_message returns it in full.", []string{"query"}, []string{"limit", "maxTextChars"}},
 		{"list_dialogs", "List chats with marked IDs and unread counts (default 100, max 500). archived=true selects archived chats only, matching the original service.", nil, []string{"limit", "archived"}},
 		{"list_folders", "List configured Telegram chat folders.", nil, nil},
 		{"list_folder_dialogs", "List chats in a custom folder by folderId from list_folders (default 100, max 500).", []string{"folderId"}, []string{"limit"}},
-		{"get_pinned", "Read pinned messages (default 20, max 50).", []string{"groupUrl"}, []string{"limit"}},
+		{"get_pinned", "Read pinned messages (default 20, max 50). maxTextChars truncates each text, marked [truncated]; get_message returns it in full.", []string{"groupUrl"}, []string{"limit", "maxTextChars"}},
 		{"get_media_info", "Inspect media without downloading it.", []string{"groupUrl", "messageId"}, nil},
 		{"download_media", "Download media to a local file. maxMB can only lower the configured limit; 0 or omitted uses it.", []string{"groupUrl", "messageId"}, []string{"maxMB"}},
 		{"get_thumbnail", "Download only a media preview to a local file.", []string{"groupUrl", "messageId"}, nil},
