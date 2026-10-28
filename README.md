@@ -62,7 +62,7 @@ Requires Go 1.26+ and an existing Telegram account; creating accounts is unsuppo
 
    **QR alternative:** run `./bin/telegram-mcp setup qr`, then confirm the QR token in the logged-in phone's Telegram app: Settings → Devices → Scan QR Code. Tokens refresh on expiry. Enter 2FA when prompted after scanning; otherwise login remains incomplete. QR needs no phone number or code and is unaffected by code-delivery restrictions.
 
-   Setup creates `TELEGRAM_SESSION_PATH` (default `~/.telegram-mcp/session.json`) with `0600` permissions. This is a local session, not a portal download or generated string session. Codes and passwords are never written to configuration.
+   Setup creates `TELEGRAM_SESSION_PATH` (default `~/.telegram-mcp/session.json`) with `0600` permissions. This is a local session, not a portal download or generated string session. Updates replace the file atomically (temp file, fsync, rename), so a crash or full disk keeps the previous session. Codes and passwords are never written to configuration.
 
 4. **Connect your client.** Use this shared `mcpServers` configuration:
 
@@ -176,7 +176,7 @@ export TELEGRAM_MCP_HTTP_TOKEN="$(openssl rand -hex 32)"   # keep it; clients ne
 - Require `Authorization: Bearer <TELEGRAM_MCP_HTTP_TOKEN>` on every request; otherwise `401`. Protect the token like the session: it grants all tools, including `mark_read` and downloads.
 - Plain HTTP binds only to loopback (`127.0.0.1`, `[::1]`, `localhost`); `0.0.0.0` and `:8080` are refused. Publish through an HTTPS proxy on the same host.
 - Files from `download_media` and `get_thumbnail` stay on the server host. Use `view_thumbnail` to get a preview inline in the MCP response.
-- Use a process manager, e.g. systemd with `ExecStart=/path/to/bin/telegram-mcp http` and `EnvironmentFile=`. SIGTERM stops it cleanly.
+- Use a process manager, e.g. systemd with `ExecStart=/path/to/bin/telegram-mcp http` and `EnvironmentFile=`. On SIGTERM or a listener error, the server cancels in-flight tool calls and waits for them (HTTP shutdown up to 5s) before disconnecting from Telegram, so incomplete downloads are removed.
 
 Caddy example (TLS certificates are obtained automatically):
 
@@ -248,11 +248,11 @@ Numeric parameters must be integers. `archived=true` selects only the archive; `
 
 To walk older history, call `read_messages` or `search_messages` without `beforeId`, then pass each returned `nextBeforeId` (the smallest ID in the page) as `beforeId`. Repeat until the response is empty; that response has no cursor. `beforeId` is exclusive, so pages never overlap or skip messages.
 
-To keep list responses small, pass `maxTextChars` to `read_messages`, `search_messages`, `fetch_since`, `get_pinned` or `global_search`: each longer text is cut to that many characters and ends with `[truncated]`. Omitted, texts are returned in full. `get_message` always returns the full text.
+To keep list responses small, pass `maxTextChars` (minimum 1) to `read_messages`, `search_messages`, `fetch_since`, `get_pinned` or `global_search`: each longer text is cut to that many characters (Unicode code points, not bytes) and ends with `[truncated]`. Omitted, texts are returned in full. `get_message` always returns the full text.
 
 ### Media and local files
 
-Downloads stream with declared-size and actual-byte checks. `get_thumbnail` fetches a preview up to 320 pixels per side or an embedded thumbnail, without full media. `view_thumbnail` returns the same preview as MCP image content (with its detected MIME type) and writes no file, so remote HTTP clients can see it; the configured size limit applies to the preview bytes. Repeated downloads create separate `0600` files; failures remove incomplete files. All three tools refuse saving-prohibited (`no-forward`) media; `download_media` and `get_thumbnail` have MCP annotations for local-file writes. Sending and editing messages are unsupported.
+Downloads stream with declared-size and actual-byte checks. `get_thumbnail` fetches a preview up to 320 pixels per side or an embedded thumbnail, without full media. `view_thumbnail` returns the same preview as MCP image content (with its detected MIME type), plus a text item with the MIME type and size, and writes no file, so remote HTTP clients can see it; the configured size limit applies to the preview bytes. Repeated downloads create separate `0600` files; failures remove incomplete files. All three tools refuse saving-prohibited (`no-forward`) media; `download_media` and `get_thumbnail` have MCP annotations for local-file writes. Sending and editing messages are unsupported.
 
 ### Read state
 
@@ -288,7 +288,9 @@ go test -race ./...
 golangci-lint run ./...
 ```
 
-Offline tests need no credentials or network. MCP tests cover handshake, tools, calls, validation, and errors; fake MTProto tests cover history pagination, ID-gap cursors, archives, and message/chat ownership. Separate tests cover media metadata, limits, and cleanup. Real login, API access, and account downloads require manual checks after `setup`.
+Offline tests need no credentials or network. MCP tests cover handshake, tools, calls, validation, errors, and inline `view_thumbnail` images; fake MTProto tests cover `fetch_since` and `beforeId` history and search walks across ID gaps, archives, and message/chat ownership. Other tests cover `maxTextChars` truncation, media metadata, limits, truncated-download rejection, cleanup, atomic session writes, and HTTP shutdown draining. Real login, API access, and account downloads require manual checks after `setup`.
+
+CI (`.github/workflows/ci.yml`) runs `go test -race ./...`, golangci-lint v2.15.0, and `go build .` on pull requests and pushes to `main`. `govulncheck.yml` scans with the current stable Go on the same triggers and weekly. Dependabot updates Go modules and GitHub Actions weekly.
 
 ## License
 
