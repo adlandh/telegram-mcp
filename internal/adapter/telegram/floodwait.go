@@ -22,7 +22,8 @@ func FloodWait() gotd.Middleware {
 			if d, ok := tgerr.AsFloodWait(err); !ok || d > maxFloodWait {
 				return err
 			}
-			if _, err := tgerr.FloodWait(ctx, err); ctx.Err() != nil {
+			// ok is false only when ctx ended during the wait; err is then ctx.Err().
+			if ok, err := tgerr.FloodWait(ctx, err); !ok {
 				return err
 			}
 			return next.Invoke(ctx, in, out)
