@@ -9,7 +9,7 @@ A Go MCP server for reading and searching conversations, groups, and channels vi
 [Get started](#getting-started) · [Connect a client](#client-setup) · [HTTP hosting](#http-access) · [Tool reference](#tools) · [Configuration](#configuration)
 
 - **Find context:** read history, search one chat or across chats, inspect replies and pinned messages.
-- **Follow conversations:** browse dialogs and folders, or page through new messages with a safe `fetch_since` cursor.
+- **Follow conversations:** check which account is connected, browse dialogs and folders (optionally unread only), or page through new messages with a safe `fetch_since` cursor.
 - **Inspect media:** view metadata, download files, fetch thumbnails to a file, or view them inline as images, within configured limits.
 
 ### A tool call
@@ -24,9 +24,9 @@ After setup, ask your MCP client to call `fetch_since` with these arguments:
 }
 ```
 
-Replace the example chat and ID. The tool returns the earliest messages after `sinceId`; use the returned `maxId` as the next cursor. See [Tools](#tools) for all 15 tools and their limits.
+Replace the example chat and ID. The tool returns the earliest messages after `sinceId`; use the returned `maxId` as the next cursor. See [Tools](#tools) for all 17 tools and their limits.
 
-**Side effects are explicit:** `mark_read` changes Telegram read state; `download_media` and `get_thumbnail` write local files; `view_thumbnail` writes none. Other tools do not mark messages read. Sending, editing, and joining chats are unsupported.
+**Side effects are explicit:** only `mark_read` and `save_draft` change account state: `mark_read` advances the read cursor, `save_draft` replaces a chat's draft. `download_media` and `get_thumbnail` write local files; `view_thumbnail` writes none. Other tools do not mark messages read. Nothing sends, edits, or deletes messages or joins chats.
 
 ## Getting started
 
@@ -173,7 +173,7 @@ export TELEGRAM_MCP_HTTP_TOKEN="$(openssl rand -hex 32)"   # keep it; clients ne
 # serving MCP on http://127.0.0.1:8080/mcp
 ```
 
-- Require `Authorization: Bearer <TELEGRAM_MCP_HTTP_TOKEN>` on every request; otherwise `401`. Protect the token like the session: it grants all tools, including `mark_read` and downloads.
+- Require `Authorization: Bearer <TELEGRAM_MCP_HTTP_TOKEN>` on every request; otherwise `401`. Protect the token like the session: it grants all tools, including `mark_read`, `save_draft` and downloads.
 - Plain HTTP binds only to loopback (`127.0.0.1`, `[::1]`, `localhost`); `0.0.0.0` and `:8080` are refused. Publish through an HTTPS proxy on the same host.
 - Files from `download_media` and `get_thumbnail` stay on the server host. Use `view_thumbnail` to get a preview inline in the MCP response.
 - Use a process manager, e.g. systemd with `ExecStart=/path/to/bin/telegram-mcp http` and `EnvironmentFile=`. On SIGTERM or a listener error, the server cancels in-flight tool calls and waits for them (HTTP shutdown up to 5s) before disconnecting from Telegram, so incomplete downloads are removed.
@@ -222,21 +222,25 @@ Defaults and maximums are listed below. Numeric parameters are integers; chat ID
 | `get_message` | `groupUrl`, `messageId` | — |
 | `global_search` | `query` | `limit`: 30, maximum 100; `maxTextChars` |
 | `get_group_info` | `groupUrl` | — |
-| `list_dialogs` | — | `limit`: 100, maximum 500; `archived`: false |
+| `get_me` | — | — |
+| `list_dialogs` | — | `limit`: 100, maximum 500; `archived`: false; `unreadOnly`: false |
 | `list_folders` | — | — |
-| `list_folder_dialogs` | `folderId` | `limit`: 100, maximum 500 |
+| `list_folder_dialogs` | `folderId` | `limit`: 100, maximum 500; `unreadOnly`: false |
 | `get_pinned` | `groupUrl` | `limit`: 20, maximum 50; `maxTextChars` |
 | `get_media_info` | `groupUrl`, `messageId` | — |
 | `download_media` | `groupUrl`, `messageId` | `maxMB`: lowers the configured limit; `0` or omitted uses it |
 | `get_thumbnail` | `groupUrl`, `messageId` | — |
 | `view_thumbnail` | `groupUrl`, `messageId` | — |
 | `mark_read` | `groupUrl` | `messageId`: marks up to and including it; omitted marks the whole chat |
+| `save_draft` | `groupUrl`, `text` | — |
 
 ### Chats and folders
 
-`groupUrl` accepts `@username`, a bare name, `https://t.me/name`, message links (including private-channel `https://t.me/c/...`), or a numeric **ID as a string** from `list_dialogs`. IDs resolve through main and archived dialogs. Invite links are unused; the service never joins chats.
+`groupUrl` accepts `@username`, a bare name, `https://t.me/name`, message links (including private-channel `https://t.me/c/...`), or a numeric **ID as a string** from `list_dialogs`. IDs resolve through main and archived dialogs. Invite links are unused; the service never joins chats. `get_me` returns the connected account's ID, name and username, never its phone number.
 
 Numeric parameters must be integers. `archived=true` selects only the archive; `false` selects only the main list.
+
+`unreadOnly=true` on `list_dialogs` or `list_folder_dialogs` keeps only chats with unread messages or a manual "marked as unread" flag; `limit` counts those chats, so the scan continues past read ones. Dialog lines show `marked unread` for manually marked chats.
 
 `list_folders` reports custom `folderId`s and **explicitly included** chat counts; automatic rules may add chats. Use the integer ID with `list_folder_dialogs`, e.g. `{"folderId": 2, "limit": 50}`; returned marked chat IDs work with other tools. Order: pinned, other explicit inclusions, then automatic main/archive matches; it differs from Telegram's tab order. Empty folders return explanatory text; missing IDs return errors. `list_dialogs` retains its main/archive selection.
 
@@ -252,11 +256,15 @@ To keep list responses small, pass `maxTextChars` (minimum 1) to `read_messages`
 
 ### Media and local files
 
-Downloads stream with declared-size and actual-byte checks. `get_thumbnail` fetches a preview up to 320 pixels per side or an embedded thumbnail, without full media. `view_thumbnail` returns the same preview as MCP image content (with its detected MIME type), plus a text item with the MIME type and size, and writes no file, so remote HTTP clients can see it; the configured size limit applies to the preview bytes. Repeated downloads create separate `0600` files; failures remove incomplete files. All three tools refuse saving-prohibited (`no-forward`) media; `download_media` and `get_thumbnail` have MCP annotations for local-file writes. Sending and editing messages are unsupported.
+Downloads stream with declared-size and actual-byte checks. `get_thumbnail` fetches a preview up to 320 pixels per side or an embedded thumbnail, without full media. `view_thumbnail` returns the same preview as MCP image content (with its detected MIME type), plus a text item with the MIME type and size, and writes no file, so remote HTTP clients can see it; the configured size limit applies to the preview bytes. Repeated downloads create separate `0600` files; failures remove incomplete files. All three tools refuse saving-prohibited (`no-forward`) media; `download_media` and `get_thumbnail` have MCP annotations for local-file writes.
 
 ### Read state
 
-Only `mark_read` changes Telegram account state; other tools never acknowledge reads. Its per-chat cursor marks all messages through `messageId`, not individual messages. Omit `messageId` to mark through the latest message and clear manual "marked as unread". Mention/reaction badges and forum-topic read state stay unchanged. MCP annotations declare it not read-only and idempotent.
+Only `mark_read` changes Telegram read state; other tools never acknowledge reads. Its per-chat cursor marks all messages through `messageId`, not individual messages. Omit `messageId` to mark through the latest message and clear manual "marked as unread". Mention/reaction badges and forum-topic read state stay unchanged. MCP annotations declare it not read-only and idempotent.
+
+### Drafts
+
+`save_draft` stores `text` (1–4096 characters, plain text, kept exactly as given) as the chat's cloud draft, replacing any existing draft; the user sees it in every Telegram client and decides whether to send it. It never sends a message, does not mark messages read, and resolves `groupUrl` like other tools, so invite links are rejected. Telegram may refuse drafts where the account cannot post, e.g. broadcast channels; that returns an error. MCP annotations declare it not read-only, destructive (it overwrites a draft) and idempotent.
 
 ## Architecture
 
@@ -288,7 +296,7 @@ go test -race ./...
 golangci-lint run ./...
 ```
 
-Offline tests need no credentials or network. MCP tests cover handshake, tools, calls, validation, errors, and inline `view_thumbnail` images; fake MTProto tests cover `fetch_since` and `beforeId` history and search walks across ID gaps, archives, and message/chat ownership. Other tests cover `maxTextChars` truncation, media metadata, limits, truncated-download rejection, cleanup, atomic session writes, and HTTP shutdown draining. Real login, API access, and account downloads require manual checks after `setup`.
+Offline tests need no credentials or network. MCP tests cover handshake, tools, calls, validation, errors, and inline `view_thumbnail` images; fake MTProto tests cover `fetch_since` and `beforeId` history and search walks across ID gaps, archives, and message/chat ownership, plus `unreadOnly` scans past read pages, `get_me` without the phone, and `save_draft` issuing only the draft RPC. Other tests cover `maxTextChars` truncation, media metadata, limits, truncated-download rejection, cleanup, atomic session writes, and HTTP shutdown draining. Real login, API access, and account downloads require manual checks after `setup`.
 
 CI (`.github/workflows/ci.yml`) runs `go test -race ./...`, golangci-lint v2.15.0, and `go build .` on pull requests and pushes to `main`. `govulncheck.yml` scans with the current stable Go on the same triggers and weekly. Dependabot updates Go modules and GitHub Actions weekly.
 

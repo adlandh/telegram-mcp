@@ -23,6 +23,14 @@ type fakeTelegram struct {
 	limit       int
 	folderChats []domain.Chat
 	folderErr   error
+	archived    bool
+	self        domain.Chat
+	selfErr     error
+	draftCalls  int
+	draftChat   string
+	draftText   string
+	draftErr    error
+	unreadOnly  bool
 	markChat    string
 	markID      int
 	markCalls   int
@@ -41,8 +49,21 @@ func (f *fakeTelegram) MarkRead(_ context.Context, chat string, messageID int) (
 
 func (f *fakeTelegram) Folders(context.Context) ([]domain.Folder, error) { return f.folders, nil }
 
-func (f *fakeTelegram) FolderDialogs(_ context.Context, id, limit int) ([]domain.Chat, error) {
-	f.folderID, f.limit = id, limit
+func (f *fakeTelegram) FolderDialogs(_ context.Context, id, limit int, unreadOnly bool) ([]domain.Chat, error) {
+	f.folderID, f.limit, f.unreadOnly = id, limit, unreadOnly
+	return f.folderChats, f.folderErr
+}
+
+func (f *fakeTelegram) SaveDraft(_ context.Context, chat, text string) (string, error) {
+	f.draftCalls++
+	f.draftChat, f.draftText = chat, text
+	return "-5", f.draftErr
+}
+
+func (f *fakeTelegram) Self(context.Context) (domain.Chat, error) { return f.self, f.selfErr }
+
+func (f *fakeTelegram) Dialogs(_ context.Context, limit int, archived, unreadOnly bool) ([]domain.Chat, error) {
+	f.limit, f.archived, f.unreadOnly = limit, archived, unreadOnly
 	return f.folderChats, f.folderErr
 }
 
@@ -331,10 +352,82 @@ func TestMarkRead(t *testing.T) {
 func TestOtherToolsDoNotMarkRead(t *testing.T) {
 	f := &fakeTelegram{}
 	s := New(f, 200, time.Minute)
-	for _, name := range []string{"read_messages", "search_messages", "fetch_since", "get_pinned", "global_search", "list_folders", "list_folder_dialogs", "download_media", "get_thumbnail"} {
-		_, _ = s.Execute(t.Context(), name, Arguments{GroupURL: "@x", Query: "q", SinceID: new(0), MessageID: 1, FolderID: 2})
+	for _, name := range []string{"read_messages", "search_messages", "fetch_since", "get_pinned", "global_search", "list_folders", "list_folder_dialogs", "download_media", "get_thumbnail", "save_draft"} {
+		_, _ = s.Execute(t.Context(), name, Arguments{GroupURL: "@x", Query: "q", SinceID: new(0), MessageID: 1, FolderID: 2, Text: "draft"})
 	}
 	if f.markCalls != 0 {
 		t.Fatalf("read tools called MarkRead %d times", f.markCalls)
+	}
+}
+
+func TestUnreadOnlyDialogs(t *testing.T) {
+	f := &fakeTelegram{folderChats: []domain.Chat{{ID: "3", Type: "User", Title: "Ann", UnreadMark: true}, {ID: "4", Type: "User", Title: "Bob", Unread: 2}}}
+	s := New(f, 200, time.Minute)
+	got, err := s.Execute(t.Context(), "list_dialogs", Arguments{Archived: true, UnreadOnly: true})
+	if err != nil || !f.unreadOnly || !f.archived || !strings.Contains(got, "User: Ann  (0 unread, marked unread) [id:3]") || !strings.Contains(got, "User: Bob  (2 unread) [id:4]") {
+		t.Fatalf("list_dialogs: %q, unreadOnly=%t archived=%t, %v", got, f.unreadOnly, f.archived, err)
+	}
+	if _, err := s.Execute(t.Context(), "list_dialogs", Arguments{}); err != nil || f.unreadOnly {
+		t.Fatalf("omitted unreadOnly passed %t, %v", f.unreadOnly, err)
+	}
+	if _, err := s.Execute(t.Context(), "list_folder_dialogs", Arguments{FolderID: 2, UnreadOnly: true}); err != nil || !f.unreadOnly {
+		t.Fatalf("folder unreadOnly passed %t, %v", f.unreadOnly, err)
+	}
+	if _, err := s.Execute(t.Context(), "list_folder_dialogs", Arguments{FolderID: 2}); err != nil || f.unreadOnly {
+		t.Fatalf("omitted folder unreadOnly passed %t, %v", f.unreadOnly, err)
+	}
+	f.folderChats = nil
+	got, err = s.Execute(t.Context(), "list_folder_dialogs", Arguments{FolderID: 2, UnreadOnly: true})
+	if err != nil || got != "(no dialogs in folder)" {
+		t.Fatalf("folder without unread members: %q, %v", got, err)
+	}
+}
+
+func TestGetMe(t *testing.T) {
+	f := &fakeTelegram{self: domain.Chat{ID: "42", Title: "Ann Lee", Username: "@annlee", Type: "User"}}
+	s := New(f, 200, time.Minute)
+	got, err := s.Execute(t.Context(), "get_me", Arguments{})
+	if err != nil || got != "ID: 42\nName: Ann Lee\nUsername: @annlee" {
+		t.Fatalf("get_me: %q, %v", got, err)
+	}
+	f.self.Username = ""
+	got, err = s.Execute(t.Context(), "get_me", Arguments{})
+	if err != nil || got != "ID: 42\nName: Ann Lee\nUsername: N/A" {
+		t.Fatalf("get_me without username: %q, %v", got, err)
+	}
+	f.selfErr = errors.New("unavailable")
+	if got, err := s.Execute(t.Context(), "get_me", Arguments{}); !errors.Is(err, f.selfErr) || got != "" {
+		t.Fatalf("get_me error: %q, %v", got, err)
+	}
+}
+
+func TestSaveDraft(t *testing.T) {
+	long := strings.Repeat("я", 4096)
+	for _, tc := range []struct {
+		args     Arguments
+		draftErr error
+		want     string
+		wantErr  bool
+	}{
+		{args: Arguments{GroupURL: "@x"}, wantErr: true},
+		{args: Arguments{GroupURL: "@x", Text: " \n\t"}, wantErr: true},
+		{args: Arguments{GroupURL: " ", Text: "hi"}, wantErr: true},
+		{args: Arguments{GroupURL: "@x", Text: long + "я"}, wantErr: true},
+		{args: Arguments{GroupURL: "@x", Text: long}, want: "Draft saved (not sent) [id:-5]"},
+		{args: Arguments{GroupURL: " @x ", Text: "  See you at 5\n"}, want: "Draft saved (not sent) [id:-5]"},
+		{args: Arguments{GroupURL: "@x", Text: "hi"}, draftErr: errors.New("CHAT_WRITE_FORBIDDEN"), wantErr: true},
+	} {
+		f := &fakeTelegram{draftErr: tc.draftErr}
+		text, err := New(f, 200, time.Minute).Execute(t.Context(), "save_draft", tc.args)
+		if (err != nil) != tc.wantErr || text != tc.want || strings.Contains(text, "saved") == tc.wantErr {
+			t.Errorf("%q: %q, %v", tc.args.Text, text, err)
+		}
+		reached := tc.want != "" || tc.draftErr != nil
+		if (f.draftCalls == 1) != reached || (reached && (f.draftChat != "@x" || f.draftText != tc.args.Text)) {
+			t.Errorf("%q: %d calls with %q %q", tc.args.Text, f.draftCalls, f.draftChat, f.draftText)
+		}
+		if f.markCalls != 0 {
+			t.Errorf("save_draft marked messages read")
+		}
 	}
 }

@@ -35,7 +35,12 @@ type Chat struct {
 	ID, Title, Username, Type, About string
 	Members                          *int
 	Unread                           int
+	// UnreadMark is Telegram's manual "marked as unread" flag.
+	UnreadMark bool
 }
+
+// HasUnread reports whether a chat has unread messages or a manual unread mark.
+func (c Chat) HasUnread() bool { return c.Unread > 0 || c.UnreadMark }
 
 type Folder struct {
 	ID    int

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/adlandh/telegram-mcp/internal/domain"
 	"github.com/gotd/td/bin"
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
@@ -44,7 +45,7 @@ func TestFolderDialogsExplicitAndShared(t *testing.T) {
 				}
 				return nil
 			}))}
-			got, err := c.FolderDialogs(t.Context(), 2, 10)
+			got, err := c.FolderDialogs(t.Context(), 2, 10, false)
 			if err != nil || calls != 1 || len(got) != 2 || got[0].ID != "-1000000000007" || got[0].Unread != 3 || got[1].ID != "-7" {
 				t.Fatalf("explicit folder: %+v, calls=%d, err=%v", got, calls, err)
 			}
@@ -63,11 +64,11 @@ func TestFolderDialogsUnknownAndEmpty(t *testing.T) {
 		}
 		return nil
 	}))}
-	got, err := c.FolderDialogs(t.Context(), 2, 10)
+	got, err := c.FolderDialogs(t.Context(), 2, 10, false)
 	if err != nil || len(got) != 0 {
 		t.Fatalf("empty folder: %+v, %v", got, err)
 	}
-	if _, err := c.FolderDialogs(t.Context(), 3, 10); err == nil {
+	if _, err := c.FolderDialogs(t.Context(), 3, 10, false); err == nil {
 		t.Fatal("accepted unknown folder")
 	}
 }
@@ -111,7 +112,7 @@ func TestFolderDialogsCategories(t *testing.T) {
 				}
 				return nil
 			}))}
-			got, err := c.FolderDialogs(t.Context(), 2, 1)
+			got, err := c.FolderDialogs(t.Context(), 2, 1, false)
 			if err != nil || (len(got) == 1) != tc.want {
 				t.Fatalf("category got %+v, want %t, err %v", got, tc.want, err)
 			}
@@ -140,7 +141,7 @@ func TestFolderDialogsExplicitOverrideAndExclude(t *testing.T) {
 		}
 		return nil
 	}))}
-	got, err := c.FolderDialogs(t.Context(), 2, 10)
+	got, err := c.FolderDialogs(t.Context(), 2, 10, false)
 	if err != nil || len(got) != 1 || got[0].ID != "-1" {
 		t.Fatalf("explicit override: %+v, %v", got, err)
 	}
@@ -167,7 +168,7 @@ func TestFolderDialogsSkipsInaccessibleExplicitPeer(t *testing.T) {
 		}
 		return nil
 	}))}
-	got, err := c.FolderDialogs(t.Context(), 2, 10)
+	got, err := c.FolderDialogs(t.Context(), 2, 10, false)
 	if err != nil || queries != 3 || len(got) != 1 || got[0].ID != "-1" {
 		t.Fatalf("inaccessible peer: %+v, queries=%d, err=%v", got, queries, err)
 	}
@@ -185,7 +186,7 @@ func TestFolderDialogsSelfPeerIsDeduplicated(t *testing.T) {
 		}
 		return nil
 	}))}
-	got, err := c.FolderDialogs(t.Context(), 2, 10)
+	got, err := c.FolderDialogs(t.Context(), 2, 10, false)
 	if err != nil || len(got) != 1 || got[0].ID != "5" {
 		t.Fatalf("self peer: %+v, %v", got, err)
 	}
@@ -212,7 +213,7 @@ func TestFolderDialogsCachesFromMessagePeers(t *testing.T) {
 		}
 		return nil
 	}))}
-	got, err := c.FolderDialogs(t.Context(), 2, 10)
+	got, err := c.FolderDialogs(t.Context(), 2, 10, false)
 	if err != nil || len(got) != 2 || got[0].ID != "5" || got[1].ID != "-1000000000007" {
 		t.Fatalf("from-message peers: %+v, %v", got, err)
 	}
@@ -265,7 +266,7 @@ func TestFolderDialogsRulesAndPagination(t *testing.T) {
 		}
 		return nil
 	}))}
-	got, err := c.FolderDialogs(t.Context(), 2, 10)
+	got, err := c.FolderDialogs(t.Context(), 2, 10, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,7 +320,7 @@ func TestFolderDialogsReadAndMuteState(t *testing.T) {
 				}
 				return nil
 			}))}
-			got, err := c.FolderDialogs(t.Context(), 2, 10)
+			got, err := c.FolderDialogs(t.Context(), 2, 10, false)
 			if err != nil || (len(got) == 1) != tc.want {
 				t.Fatalf("folder state got %+v, want %t, err=%v", got, tc.want, err)
 			}
@@ -341,7 +342,7 @@ func TestFolderDialogsCancellation(t *testing.T) {
 		}
 		return nil
 	}))}
-	if got, err := c.FolderDialogs(ctx, 2, 10); err == nil || got != nil {
+	if got, err := c.FolderDialogs(ctx, 2, 10, false); err == nil || got != nil {
 		t.Fatalf("cancelled folder returned %+v, %v", got, err)
 	}
 }
@@ -369,7 +370,7 @@ func TestFolderDialogsPropagatesFailures(t *testing.T) {
 				}
 				return nil
 			}))}
-			if got, err := c.FolderDialogs(t.Context(), 2, 10); err == nil || got != nil {
+			if got, err := c.FolderDialogs(t.Context(), 2, 10, false); err == nil || got != nil {
 				t.Fatalf("failure returned %+v, %v", got, err)
 			}
 		})
@@ -387,5 +388,55 @@ func assertCachedWithoutRPC(t *testing.T, c *Client, ids ...string) {
 		if r, err := c.resolve(t.Context(), id); err != nil || r.info.ID != id {
 			t.Fatalf("resolve %s: %+v, %v", id, r, err)
 		}
+	}
+}
+
+func TestFolderDialogsUnreadOnly(t *testing.T) {
+	explicitUnread := true
+	c := &Client{api: tg.NewClient(invokeFunc(func(_ context.Context, in bin.Encoder, out bin.Decoder) error {
+		switch in.(type) {
+		case *tg.MessagesGetDialogFiltersRequest:
+			out.(*tg.MessagesDialogFilters).Filters = []tg.DialogFilterClass{&tg.DialogFilter{ID: 2, Groups: true,
+				PinnedPeers: []tg.InputPeerClass{&tg.InputPeerChat{ChatID: 7}}, IncludePeers: []tg.InputPeerClass{&tg.InputPeerChannel{ChannelID: 8}}}}
+		case *tg.MessagesGetPeerDialogsRequest:
+			*out.(*tg.MessagesPeerDialogs) = tg.MessagesPeerDialogs{
+				Dialogs: []tg.DialogClass{&tg.Dialog{Peer: &tg.PeerChat{ChatID: 7}}, &tg.Dialog{Peer: &tg.PeerChannel{ChannelID: 8}, UnreadMark: explicitUnread}},
+				Chats:   []tg.ChatClass{&tg.Chat{ID: 7, Title: "Pinned"}, &tg.Channel{ID: 8, Title: "Included"}},
+			}
+		case *tg.MessagesGetDialogsRequest:
+			box := out.(*tg.MessagesDialogsBox)
+			box.Dialogs = &tg.MessagesDialogs{}
+			if in.(*tg.MessagesGetDialogsRequest).FolderID == 0 && explicitUnread {
+				box.Dialogs = &tg.MessagesDialogs{
+					Dialogs: []tg.DialogClass{&tg.Dialog{Peer: &tg.PeerChat{ChatID: 7}}, &tg.Dialog{Peer: &tg.PeerChat{ChatID: 9}}, &tg.Dialog{Peer: &tg.PeerChat{ChatID: 10}, UnreadCount: 2}},
+					Chats:   []tg.ChatClass{&tg.Chat{ID: 7}, &tg.Chat{ID: 9}, &tg.Chat{ID: 10}},
+				}
+			}
+		default:
+			t.Fatalf("unexpected RPC %T", in)
+		}
+		return nil
+	}))}
+	ids := func(unreadOnly bool) ([]string, []domain.Chat) {
+		got, err := c.FolderDialogs(t.Context(), 2, 10, unreadOnly)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := []string{}
+		for _, chat := range got {
+			out = append(out, chat.ID)
+		}
+		return out, got
+	}
+	got, chats := ids(true)
+	if !slices.Equal(got, []string{"-1000000000008", "-10"}) || !chats[0].UnreadMark || chats[1].Unread != 2 {
+		t.Fatalf("unread folder dialogs: %v %+v", got, chats)
+	}
+	if got, _ := ids(false); !slices.Equal(got, []string{"-7", "-1000000000008", "-9", "-10"}) {
+		t.Fatalf("folder dialogs: %v", got)
+	}
+	explicitUnread = false
+	if got, chats := ids(true); len(got) != 0 || chats == nil {
+		t.Fatalf("folder without unread members: %v %#v", got, chats)
 	}
 }

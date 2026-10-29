@@ -487,7 +487,7 @@ func TestDialogs(t *testing.T) {
 		}
 		return nil
 	}))}
-	got, err := c.Dialogs(t.Context(), 10, false)
+	got, err := c.Dialogs(t.Context(), 10, false, false)
 	want := []domain.Chat{
 		{ID: "1", Title: "Ann", Username: "@ann", Type: "User", Unread: 3},
 		{ID: "-1000000000002", Title: "News", Type: "Channel"},
@@ -495,7 +495,7 @@ func TestDialogs(t *testing.T) {
 	if err != nil || !slices.EqualFunc(got, want, func(a, b domain.Chat) bool { return a == b }) {
 		t.Fatalf("dialogs: %+v, %v", got, err)
 	}
-	if got, err := c.Dialogs(t.Context(), 1, true); err != nil || len(got) != 1 || folders[len(folders)-1] != 1 {
+	if got, err := c.Dialogs(t.Context(), 1, true, false); err != nil || len(got) != 1 || folders[len(folders)-1] != 1 {
 		t.Fatalf("archived dialogs: %+v, %v, folders %v", got, err, folders)
 	}
 	if folders[0] != 0 {
@@ -592,11 +592,120 @@ func TestListedDialogResolvesWithoutRescan(t *testing.T) {
 		}
 		return nil
 	}))}
-	if _, err := c.Dialogs(t.Context(), 10, false); err != nil {
+	if _, err := c.Dialogs(t.Context(), 10, false, false); err != nil {
 		t.Fatal(err)
 	}
 	scans = 0
 	if r, err := c.resolve(t.Context(), "-1000000000002"); err != nil || r.input.(*tg.InputPeerChannel).AccessHash != 7 || scans != 0 {
 		t.Fatalf("resolve: %+v, %v, scans %d", r, err, scans)
+	}
+}
+
+func TestDialogsUnreadOnly(t *testing.T) {
+	var folders []int
+	pages := map[int]int{}
+	fail := false
+	c := &Client{api: tg.NewClient(invokeFunc(func(_ context.Context, in bin.Encoder, out bin.Decoder) error {
+		req, ok := in.(*tg.MessagesGetDialogsRequest)
+		if !ok {
+			return fmt.Errorf("unexpected request %T", in)
+		}
+		if fail {
+			return errors.New("telegram failed")
+		}
+		folders = append(folders, req.FolderID)
+		page := pages[req.FolderID]
+		pages[req.FolderID]++
+		box := out.(*tg.MessagesDialogsBox)
+		switch {
+		case req.FolderID == 1:
+			box.Dialogs = &tg.MessagesDialogs{
+				Dialogs: []tg.DialogClass{&tg.Dialog{Peer: &tg.PeerUser{UserID: 50}}, &tg.Dialog{Peer: &tg.PeerUser{UserID: 51}, UnreadCount: 1}},
+				Users:   []tg.UserClass{&tg.User{ID: 50}, &tg.User{ID: 51}},
+			}
+		case page == 0:
+			// A full page of read chats must not end the unread scan.
+			users := make([]tg.UserClass, 100)
+			dialogs := make([]tg.DialogClass, 100)
+			for i := range 100 {
+				users[i] = &tg.User{ID: int64(100 + i)}
+				dialogs[i] = &tg.Dialog{Peer: &tg.PeerUser{UserID: int64(100 + i)}}
+			}
+			box.Dialogs = &tg.MessagesDialogsSlice{Count: 104, Dialogs: dialogs, Users: users}
+		default:
+			box.Dialogs = &tg.MessagesDialogs{
+				Dialogs: []tg.DialogClass{
+					&tg.Dialog{Peer: &tg.PeerUser{UserID: 1}, UnreadCount: 3},
+					&tg.Dialog{Peer: &tg.PeerUser{UserID: 2}},
+					&tg.Dialog{Peer: &tg.PeerUser{UserID: 3}, UnreadMark: true},
+					&tg.Dialog{Peer: &tg.PeerUser{UserID: 4}, UnreadCount: 1},
+				},
+				Users: []tg.UserClass{&tg.User{ID: 1}, &tg.User{ID: 2}, &tg.User{ID: 3}, &tg.User{ID: 4}},
+			}
+		}
+		return nil
+	}))}
+	ids := func(chats []domain.Chat) []string {
+		var out []string
+		for _, chat := range chats {
+			out = append(out, chat.ID)
+		}
+		return out
+	}
+	got, err := c.Dialogs(t.Context(), 2, false, true)
+	if err != nil || !slices.Equal(ids(got), []string{"1", "3"}) || got[0].Unread != 3 || !got[1].UnreadMark {
+		t.Fatalf("unread dialogs: %+v, %v", got, err)
+	}
+	clear(pages)
+	got, err = c.Dialogs(t.Context(), 104, false, false)
+	if err != nil || len(got) != 104 || got[0].ID != "100" || !got[102].UnreadMark {
+		t.Fatalf("all dialogs: %d %v", len(got), err)
+	}
+	folders = nil
+	got, err = c.Dialogs(t.Context(), 10, true, true)
+	if err != nil || !slices.Equal(ids(got), []string{"51"}) || len(folders) == 0 || slices.ContainsFunc(folders, func(f int) bool { return f != 1 }) {
+		t.Fatalf("unread archive: %+v, %v, folders %v", got, err, folders)
+	}
+	fail = true
+	if _, err := c.Dialogs(t.Context(), 10, false, true); err == nil {
+		t.Fatal("telegram error was swallowed")
+	}
+}
+
+func TestSelf(t *testing.T) {
+	var fail error
+	c := &Client{api: tg.NewClient(invokeFunc(func(ctx context.Context, in bin.Encoder, out bin.Decoder) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		req, ok := in.(*tg.UsersGetUsersRequest)
+		if !ok || len(req.ID) != 1 {
+			t.Fatalf("unexpected RPC %#v", in)
+		}
+		if _, ok := req.ID[0].(*tg.InputUserSelf); !ok {
+			t.Fatalf("requested %T", req.ID[0])
+		}
+		if fail != nil {
+			return fail
+		}
+		out.(*tg.UserClassVector).Elems = []tg.UserClass{&tg.User{ID: 42, Self: true, FirstName: "Ann", LastName: "Lee", Username: "annlee", Phone: "491234567890"}}
+		return nil
+	}))}
+	me, err := c.Self(t.Context())
+	if err != nil || me != (domain.Chat{ID: "42", Title: "Ann Lee", Username: "@annlee", Type: "User"}) {
+		t.Fatalf("self: %+v, %v", me, err)
+	}
+	if strings.Contains(fmt.Sprintf("%+v", me), "491234567890") {
+		t.Fatal("phone number leaked")
+	}
+	fail = errors.New("telegram failed")
+	if _, err := c.Self(t.Context()); !errors.Is(err, fail) {
+		t.Fatalf("telegram error: %v", err)
+	}
+	fail = nil
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := c.Self(ctx); err == nil {
+		t.Fatal("cancelled request succeeded")
 	}
 }

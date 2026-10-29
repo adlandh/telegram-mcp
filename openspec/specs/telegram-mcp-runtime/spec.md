@@ -12,28 +12,31 @@ The server SHALL expose exactly the following tools and parameter names. Success
 
 | Tool | Required parameters | Optional parameters |
 | --- | --- | --- |
-| read_messages | groupUrl | limit |
-| search_messages | groupUrl, query | limit |
-| fetch_since | groupUrl, sinceId | limit |
+| read_messages | groupUrl | limit, beforeId, maxTextChars |
+| search_messages | groupUrl, query | limit, beforeId, maxTextChars |
+| fetch_since | groupUrl, sinceId | limit, maxTextChars |
 | get_message | groupUrl, messageId | none |
-| global_search | query | limit |
+| global_search | query | limit, maxTextChars |
 | get_group_info | groupUrl | none |
-| list_dialogs | none | limit, archived |
+| get_me | none | none |
+| list_dialogs | none | limit, archived, unreadOnly |
 | list_folders | none | none |
-| list_folder_dialogs | folderId | limit |
-| get_pinned | groupUrl | limit |
+| list_folder_dialogs | folderId | limit, unreadOnly |
+| get_pinned | groupUrl | limit, maxTextChars |
 | get_media_info | groupUrl, messageId | none |
 | download_media | groupUrl, messageId | maxMB |
 | get_thumbnail | groupUrl, messageId | none |
 | view_thumbnail | groupUrl, messageId | none |
 | mark_read | groupUrl | messageId |
+| save_draft | groupUrl, text | none |
 
 #### Scenario: Discover tools
 
 - **WHEN** an MCP client initializes and requests the tool list
-- **THEN** it receives the 15 tools and their input schemas
-- **AND** only `download_media`, `get_thumbnail` and `mark_read` advertise `readOnlyHint=false`, while all tools advertise `destructiveHint=false`
-- **AND** `mark_read` advertises `idempotentHint=true`
+- **THEN** it receives the 17 tools and their input schemas
+- **AND** only `download_media`, `get_thumbnail`, `mark_read` and `save_draft` advertise `readOnlyHint=false`
+- **AND** only `save_draft` advertises `destructiveHint=true`, because it replaces an existing draft; all other tools advertise `destructiveHint=false`
+- **AND** `mark_read` and `save_draft` advertise `idempotentHint=true`
 
 #### Scenario: Telegram request fails
 
@@ -47,7 +50,7 @@ The server SHALL expose exactly the following tools and parameter names. Success
 
 ### Requirement: Validate tool arguments
 
-The server SHALL reject unknown properties, missing required parameters, incorrect types, non-integer numeric inputs, non-positive limits, and blank required chat identifiers or search queries. `messageId` SHALL be in `[1, 2147483647]` whenever supplied, including the optional `messageId` of `mark_read`, `sinceId` in `[0, 2147483646]`, and `maxMB` SHALL be non-negative and representable as signed 64-bit bytes after multiplication by 1048576. `list_folder_dialogs` SHALL require integer `folderId` in `[2, 2147483647]`; IDs 0 and 1 SHALL remain main/archive selectors for the existing `list_dialogs` behavior, not custom folder IDs.
+The server SHALL reject unknown properties, missing required parameters, incorrect types, non-integer numeric inputs, non-positive limits, and blank required chat identifiers, search queries or draft texts. `messageId` SHALL be in `[1, 2147483647]` whenever supplied, including the optional `messageId` of `mark_read`, `sinceId` in `[0, 2147483646]`, and `maxMB` SHALL be non-negative and representable as signed 64-bit bytes after multiplication by 1048576. `list_folder_dialogs` SHALL require integer `folderId` in `[2, 2147483647]`; IDs 0 and 1 SHALL remain main/archive selectors for the existing `list_dialogs` behavior, not custom folder IDs. `unreadOnly` SHALL be boolean. `save_draft` `text` SHALL contain at most 4096 Unicode code points.
 
 #### Scenario: Invalid arguments do not reach Telegram
 
@@ -73,6 +76,16 @@ The server SHALL reject unknown properties, missing required parameters, incorre
 
 - **WHEN** a caller invokes `mark_read` with a blank `groupUrl`, `messageId=0`, a fractional `messageId`, or `messageId` above 2147483647
 - **THEN** the request fails validation before calling Telegram
+
+#### Scenario: Invalid unreadOnly is rejected
+
+- **WHEN** a caller passes `unreadOnly="yes"` or `unreadOnly=1`
+- **THEN** the request fails validation before calling Telegram
+
+#### Scenario: Invalid draft text does not reach Telegram
+
+- **WHEN** a caller invokes `save_draft` without `text`, with whitespace-only `text`, or with `text` longer than 4096 code points
+- **THEN** the request fails validation before calling Telegram and no draft changes
 
 ### Requirement: Environment-only configuration
 
@@ -196,7 +209,7 @@ Setup SHALL also provide a code-free `setup qr` alternative that renders a QR lo
 
 ### Requirement: Stdio isolation and read-only account access
 
-Invocation without arguments SHALL serve MCP over stdin/stdout. The `http` command SHALL serve MCP over HTTP instead and SHALL NOT read MCP messages from stdin. Diagnostics and setup prompts SHALL go to stderr. Help SHALL succeed without credentials. Tools SHALL NOT send, edit, delete, or join chats. No tool other than `mark_read` SHALL acknowledge messages as read. Each tool call SHALL receive the configured request deadline and propagate cancellation to external operations; normal serving SHALL respond to process termination signals by canceling its lifecycle.
+Invocation without arguments SHALL serve MCP over stdin/stdout. The `http` command SHALL serve MCP over HTTP instead and SHALL NOT read MCP messages from stdin. Diagnostics and setup prompts SHALL go to stderr. Help SHALL succeed without credentials. Tools SHALL NOT send, edit, delete, or join chats. No tool other than `mark_read` SHALL acknowledge messages as read. No tool other than `mark_read` and `save_draft` SHALL change Telegram account state. Each tool call SHALL receive the configured request deadline and propagate cancellation to external operations; normal serving SHALL respond to process termination signals by canceling its lifecycle.
 
 #### Scenario: Help and startup errors keep stdout clean
 
@@ -217,6 +230,11 @@ Invocation without arguments SHALL serve MCP over stdin/stdout. The `http` comma
 
 - **WHEN** the server runs as `telegram-mcp http`
 - **THEN** it serves MCP only over HTTP and writes nothing to stdout
+
+#### Scenario: Saving a draft sends nothing
+
+- **WHEN** a caller invokes `save_draft`
+- **THEN** no message is sent, edited or deleted, and only the chat's draft changes
 
 ### Requirement: Crash-safe session persistence
 

@@ -42,7 +42,7 @@ type folderDialog struct {
 
 func folderDialogFrom(d *tg.Dialog, entities peer.Entities) folderDialog {
 	r := describe(d.Peer, entities)
-	r.info.Unread = d.UnreadCount
+	r.info.Unread, r.info.UnreadMark = d.UnreadCount, d.UnreadMark
 	return folderDialog{resolved: r, dialog: d, users: entities}
 }
 
@@ -90,7 +90,7 @@ func (d folderDialog) category(f *tg.DialogFilter) (tg.InputNotifyPeerClass, boo
 	return nil, false, fmt.Errorf("unsupported dialog peer for folder matching")
 }
 
-func (c *Client) FolderDialogs(ctx context.Context, folderID, limit int) ([]domain.Chat, error) {
+func (c *Client) FolderDialogs(ctx context.Context, folderID, limit int, unreadOnly bool) ([]domain.Chat, error) {
 	filters, err := c.api.MessagesGetDialogFilters(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("get folder filters: %w", err)
@@ -192,8 +192,11 @@ func (c *Client) FolderDialogs(ctx context.Context, folderID, limit int) ([]doma
 			// the response entities give the plain peer with its access hash.
 			d.input, _ = d.users.ExtractPeer(d.dialog.Peer)
 			c.remember(d.resolved)
-			result = append(result, d.info)
 			emitted[key] = true
+			if unreadOnly && !d.info.HasUnread() {
+				continue
+			}
+			result = append(result, d.info)
 			if len(result) == limit {
 				return result, nil
 			}
@@ -254,8 +257,11 @@ func (c *Client) FolderDialogs(ctx context.Context, folderID, limit int) ([]doma
 			}
 			candidate.input = e.Peer
 			c.remember(candidate.resolved)
-			result = append(result, candidate.info)
 			emitted[key] = true
+			if unreadOnly && !candidate.info.HasUnread() {
+				continue
+			}
+			result = append(result, candidate.info)
 		}
 		if err := iter.Err(); err != nil {
 			return nil, fmt.Errorf("get folder dialogs: %w", err)

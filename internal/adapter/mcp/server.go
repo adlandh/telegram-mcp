@@ -31,15 +31,17 @@ func New(service Executor) *mcp.Server {
 		{"fetch_since", "Read messages newer than sinceId, oldest first, with a safe next maxId cursor (default 100, max 200). maxTextChars truncates each text, marked [truncated]; get_message returns it in full.", []string{"groupUrl", "sinceId"}, []string{"limit", "maxTextChars"}, true},
 		{"get_message", "Get a message and its engagement, album, reply and media metadata.", []string{"groupUrl", "messageId"}, nil, true},
 		{"global_search", "Search messages across all chats (default 30, max 100). maxTextChars truncates each text, marked [truncated]; get_message returns it in full.", []string{"query"}, []string{"limit", "maxTextChars"}, true},
-		{"list_dialogs", "List chats with marked IDs and unread counts (default 100, max 500). archived=true selects archived chats only; false selects the main list.", nil, []string{"limit", "archived"}, true},
+		{"get_me", "Get the authenticated Telegram account's marked ID, name and username (no phone number).", nil, nil, true},
+		{"list_dialogs", "List chats with marked IDs and unread counts (default 100, max 500). archived=true selects archived chats only; false selects the main list. unreadOnly=true keeps only chats with unread messages or a manual unread mark; limit counts those.", nil, []string{"limit", "archived", "unreadOnly"}, true},
 		{"list_folders", "List configured Telegram chat folders.", nil, nil, true},
-		{"list_folder_dialogs", "List chats in a custom folder by folderId from list_folders (default 100, max 500).", []string{"folderId"}, []string{"limit"}, true},
+		{"list_folder_dialogs", "List chats in a custom folder by folderId from list_folders (default 100, max 500). unreadOnly=true keeps only chats with unread messages or a manual unread mark; limit counts those.", []string{"folderId"}, []string{"limit", "unreadOnly"}, true},
 		{"get_pinned", "Read pinned messages (default 20, max 50). maxTextChars truncates each text, marked [truncated]; get_message returns it in full.", []string{"groupUrl"}, []string{"limit", "maxTextChars"}, true},
 		{"get_media_info", "Inspect media without downloading it.", []string{"groupUrl", "messageId"}, nil, true},
 		{"download_media", "Download media to a local file. maxMB can only lower the configured limit; 0 or omitted uses it.", []string{"groupUrl", "messageId"}, []string{"maxMB"}, false},
 		{"get_thumbnail", "Download only a media preview to a local file.", []string{"groupUrl", "messageId"}, nil, false},
 		{"view_thumbnail", "Return a media preview as an inline image without writing a file; works for remote clients.", []string{"groupUrl", "messageId"}, nil, true},
 		{"mark_read", "Mark messages as read in Telegram (changes account state). Telegram tracks a read cursor, so messageId marks every message up to and including it; omit it to mark the whole chat read.", []string{"groupUrl"}, []string{"messageId"}, false},
+		{"save_draft", "Save plain text as the chat's draft for the user to review and send (changes account state). Never sends a message; replaces any existing draft; does not mark messages read.", []string{"groupUrl", "text"}, nil, false},
 	} {
 		properties := map[string]any{}
 		for _, key := range slices.Concat(def.required, def.optional) {
@@ -49,7 +51,9 @@ func New(service Executor) *mcp.Server {
 				p = map[string]any{"type": "string", "minLength": 1, "description": "https://t.me/name, @username, or marked numeric ID from list_dialogs"}
 			case "query":
 				p = map[string]any{"type": "string", "minLength": 1}
-			case "archived":
+			case "text":
+				p = map[string]any{"type": "string", "minLength": 1, "maxLength": 4096}
+			case "archived", "unreadOnly":
 				p = map[string]any{"type": "boolean"}
 			case "sinceId", "maxMB":
 				p["minimum"] = 0
@@ -66,7 +70,7 @@ func New(service Executor) *mcp.Server {
 			schema["required"] = def.required
 		}
 		mcp.AddTool(server, &mcp.Tool{Name: def.name, Description: def.description, InputSchema: schema,
-			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: def.readOnly, IdempotentHint: def.name == "mark_read", DestructiveHint: new(false), OpenWorldHint: new(true)}},
+			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: def.readOnly, IdempotentHint: def.name == "mark_read" || def.name == "save_draft", DestructiveHint: new(def.name == "save_draft"), OpenWorldHint: new(true)}},
 			func(ctx context.Context, _ *mcp.CallToolRequest, args app.Arguments) (*mcp.CallToolResult, any, error) {
 				if def.name == "view_thumbnail" {
 					img, err := service.ViewThumbnail(ctx, args)

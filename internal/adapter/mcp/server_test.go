@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/adlandh/telegram-mcp/internal/app"
@@ -53,18 +54,20 @@ func TestMCPContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 15 {
+	if len(tools.Tools) != 17 {
 		t.Fatalf("got %d tools", len(tools.Tools))
 	}
 	for _, tool := range tools.Tools {
 		args := map[string]any{}
 		switch tool.Name {
-		case "list_folders":
+		case "list_folders", "get_me":
 		case "list_dialogs":
 			args["archived"] = true
+			args["unreadOnly"] = true
 		case "list_folder_dialogs":
 			args["folderId"] = 2
 			args["limit"] = 50
+			args["unreadOnly"] = true
 		case "global_search":
 			args["query"] = "hello"
 		default:
@@ -76,6 +79,8 @@ func TestMCPContract(t *testing.T) {
 				args["sinceId"] = 0
 			case "get_message", "get_media_info", "download_media", "get_thumbnail", "view_thumbnail", "mark_read":
 				args["messageId"] = 1
+			case "save_draft":
+				args["text"] = "See you at 5"
 			}
 		}
 		r, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: tool.Name, Arguments: args})
@@ -87,8 +92,9 @@ func TestMCPContract(t *testing.T) {
 		} else if err != nil || r.IsError || r.Content[0].(*mcp.TextContent).Text != tool.Name {
 			t.Fatalf("%s: %+v, %v", tool.Name, r, err)
 		}
-		writes := tool.Name == "download_media" || tool.Name == "get_thumbnail" || tool.Name == "mark_read"
-		if tool.Annotations.ReadOnlyHint == writes || tool.Annotations.IdempotentHint != (tool.Name == "mark_read") || *tool.Annotations.DestructiveHint {
+		writes := slices.Contains([]string{"download_media", "get_thumbnail", "mark_read", "save_draft"}, tool.Name)
+		idempotent := tool.Name == "mark_read" || tool.Name == "save_draft"
+		if tool.Annotations.ReadOnlyHint == writes || tool.Annotations.IdempotentHint != idempotent || *tool.Annotations.DestructiveHint != (tool.Name == "save_draft") {
 			t.Errorf("incorrect annotation: %s", tool.Name)
 		}
 	}
@@ -129,6 +135,37 @@ func TestMCPContract(t *testing.T) {
 		if _, ok := tool.InputSchema.(map[string]any)["properties"].(map[string]any)["maxTextChars"]; ok != slices.Contains([]string{"read_messages", "search_messages", "fetch_since", "get_pinned", "global_search"}, tool.Name) {
 			t.Errorf("%s: unexpected maxTextChars presence %t", tool.Name, ok)
 		}
+	}
+	for _, tool := range tools.Tools {
+		p, ok := tool.InputSchema.(map[string]any)["properties"].(map[string]any)["unreadOnly"]
+		if want := tool.Name == "list_dialogs" || tool.Name == "list_folder_dialogs"; ok != want || (ok && p.(map[string]any)["type"] != "boolean") {
+			t.Errorf("%s: unreadOnly schema %v", tool.Name, p)
+		}
+	}
+	for _, args := range []map[string]any{{"unreadOnly": "yes"}, {"unreadOnly": 1}, {"folderId": 2, "unreadOnly": "yes"}, {"folderId": 2, "unreadOnly": 1}} {
+		name := "list_dialogs"
+		if _, ok := args["folderId"]; ok {
+			name = "list_folder_dialogs"
+		}
+		before := calls
+		r, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: name, Arguments: args})
+		if (err == nil && !r.IsError) || calls != before {
+			t.Errorf("invalid %s unreadOnly accepted: %+v", name, args)
+		}
+	}
+	for i, args := range []map[string]any{{"groupUrl": "x"}, {"groupUrl": "x", "text": ""}, {"groupUrl": "x", "text": strings.Repeat("я", 4097)}, {"groupUrl": "x", "text": 5}, {"text": "hi"}, {"groupUrl": "x", "text": "hi", "unexpected": true}} {
+		before := calls
+		r, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: "save_draft", Arguments: args})
+		if (err == nil && !r.IsError) || calls != before {
+			t.Errorf("invalid save_draft case %d accepted or reached application", i)
+		}
+	}
+	if r, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: "save_draft", Arguments: map[string]any{"groupUrl": "x", "text": strings.Repeat("я", 4096)}}); err != nil || r.IsError {
+		t.Errorf("4096-character draft rejected: %+v, %v", r, err)
+	}
+	before := calls
+	if r, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: "get_me", Arguments: map[string]any{"groupUrl": "x"}}); (err == nil && !r.IsError) || calls != before {
+		t.Error("get_me accepted an unknown property")
 	}
 	for _, limit := range []any{500, 0, -1, 1.5} {
 		before := calls
