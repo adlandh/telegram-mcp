@@ -231,3 +231,32 @@ Every write of the Telegram session file, during setup and while serving, SHALL 
 
 - **WHEN** a session write completes
 - **THEN** the session file contains the new data and has 0600 permissions
+
+### Requirement: Absorb short Telegram rate limits
+
+While serving MCP over stdio or HTTP, when Telegram answers a request with FLOOD_WAIT or FLOOD_PREMIUM_WAIT of at most 30 seconds, the server SHALL wait the indicated time and retry that request once before reporting a result. Longer waits, a second rate-limit answer, and cancellation or deadline expiry during the wait SHALL fail as before, without further retries. The setup command SHALL NOT retry rate-limited requests.
+
+#### Scenario: Short wait is retried
+
+- **WHEN** Telegram answers a tool's request with FLOOD_WAIT of 3 seconds and then succeeds
+- **THEN** the tool returns its normal successful result after the wait
+
+#### Scenario: Long wait is reported
+
+- **WHEN** Telegram answers a request with FLOOD_WAIT longer than 30 seconds
+- **THEN** the request is not retried and the tool returns an error naming the rate limit
+
+#### Scenario: Retry is attempted only once
+
+- **WHEN** Telegram answers both the request and its retry with a short FLOOD_WAIT
+- **THEN** the tool returns an error without a third attempt
+
+#### Scenario: Deadline interrupts the wait
+
+- **WHEN** the tool's deadline expires or its MCP request is cancelled while waiting out a FLOOD_WAIT
+- **THEN** the wait stops immediately and the tool returns an error without retrying
+
+#### Scenario: Setup keeps failing fast on rate limits
+
+- **WHEN** Telegram answers a setup login request with a FLOOD_WAIT of any length
+- **THEN** setup sends no retry and reports the rate limit as before

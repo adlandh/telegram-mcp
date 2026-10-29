@@ -48,6 +48,7 @@ func TestFolderDialogsExplicitAndShared(t *testing.T) {
 			if err != nil || calls != 1 || len(got) != 2 || got[0].ID != "-1000000000007" || got[0].Unread != 3 || got[1].ID != "-7" {
 				t.Fatalf("explicit folder: %+v, calls=%d, err=%v", got, calls, err)
 			}
+			assertCachedWithoutRPC(t, c, got[0].ID, got[1].ID)
 		})
 	}
 }
@@ -113,6 +114,9 @@ func TestFolderDialogsCategories(t *testing.T) {
 			got, err := c.FolderDialogs(t.Context(), 2, 1)
 			if err != nil || (len(got) == 1) != tc.want {
 				t.Fatalf("category got %+v, want %t, err %v", got, tc.want, err)
+			}
+			if tc.want {
+				assertCachedWithoutRPC(t, c, got[0].ID)
 			}
 		})
 	}
@@ -333,5 +337,19 @@ func TestFolderDialogsPropagatesFailures(t *testing.T) {
 				t.Fatalf("failure returned %+v, %v", got, err)
 			}
 		})
+	}
+}
+
+// assertCachedWithoutRPC checks that ids listed earlier resolve from the cache.
+func assertCachedWithoutRPC(t *testing.T, c *Client, ids ...string) {
+	t.Helper()
+	c.api = tg.NewClient(invokeFunc(func(_ context.Context, in bin.Encoder, _ bin.Decoder) error {
+		t.Fatalf("listed dialog triggered RPC %T", in)
+		return nil
+	}))
+	for _, id := range ids {
+		if r, err := c.resolve(t.Context(), id); err != nil || r.info.ID != id {
+			t.Fatalf("resolve %s: %+v, %v", id, r, err)
+		}
 	}
 }
