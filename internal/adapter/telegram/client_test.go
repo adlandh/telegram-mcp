@@ -542,3 +542,61 @@ func TestSearchRPCs(t *testing.T) {
 		t.Fatalf("RPCs %q, want %q", got, want)
 	}
 }
+
+func TestUsernameResolutionIsCached(t *testing.T) {
+	calls, fail := 0, false
+	c := &Client{api: tg.NewClient(invokeFunc(func(_ context.Context, in bin.Encoder, out bin.Decoder) error {
+		req, ok := in.(*tg.ContactsResolveUsernameRequest)
+		if !ok {
+			return fmt.Errorf("unexpected request %T", in)
+		}
+		calls++
+		if fail {
+			return errors.New("USERNAME_NOT_OCCUPIED")
+		}
+		if req.Username != "Durov" {
+			t.Errorf("username %q", req.Username)
+		}
+		*out.(*tg.ContactsResolvedPeer) = tg.ContactsResolvedPeer{Peer: &tg.PeerChannel{ChannelID: 1}, Chats: []tg.ChatClass{&tg.Channel{ID: 1, AccessHash: 2, Title: "Durov"}}}
+		return nil
+	}))}
+	for _, name := range []string{"@Durov", "t.me/durov", "-1000000000001"} {
+		if r, err := c.resolve(t.Context(), name); err != nil || r.input.(*tg.InputPeerChannel).AccessHash != 2 {
+			t.Fatalf("%s: %+v, %v", name, r, err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("username resolved %d times, want 1", calls)
+	}
+	fail, calls = true, 0
+	for range 2 {
+		if _, err := c.resolve(t.Context(), "@missing"); err == nil {
+			t.Fatal("missing username resolved")
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("failed lookup reused: %d calls", calls)
+	}
+}
+
+func TestListedDialogResolvesWithoutRescan(t *testing.T) {
+	scans := 0
+	c := &Client{api: tg.NewClient(invokeFunc(func(_ context.Context, in bin.Encoder, out bin.Decoder) error {
+		if _, ok := in.(*tg.MessagesGetDialogsRequest); !ok {
+			return fmt.Errorf("unexpected request %T", in)
+		}
+		scans++
+		out.(*tg.MessagesDialogsBox).Dialogs = &tg.MessagesDialogs{
+			Dialogs: []tg.DialogClass{&tg.Dialog{Peer: &tg.PeerChannel{ChannelID: 2}}},
+			Chats:   []tg.ChatClass{&tg.Channel{ID: 2, AccessHash: 7, Title: "News"}},
+		}
+		return nil
+	}))}
+	if _, err := c.Dialogs(t.Context(), 10, false); err != nil {
+		t.Fatal(err)
+	}
+	scans = 0
+	if r, err := c.resolve(t.Context(), "-1000000000002"); err != nil || r.input.(*tg.InputPeerChannel).AccessHash != 7 || scans != 0 {
+		t.Fatalf("resolve: %+v, %v, scans %d", r, err, scans)
+	}
+}

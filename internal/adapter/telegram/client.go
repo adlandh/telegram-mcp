@@ -20,7 +20,9 @@ import (
 type Client struct {
 	api         *tg.Client
 	downloadDir string
-	peers       sync.Map // string -> resolved; ponytail: never invalidated, restart clears it
+	// peers maps marked IDs and lowercased usernames to resolved peers.
+	// ponytail: never invalidated, so a username reassigned mid-run stays stale until restart.
+	peers sync.Map // string -> resolved
 }
 
 func New(client *gotd.Client, downloadDir string) *Client {
@@ -32,6 +34,17 @@ type resolved struct {
 	info      domain.Chat
 	protected bool
 	known     bool // the peer's entity was present, so info and protected are current
+}
+
+// remember caches r under its marked ID and extra keys. Only plain input peers
+// are cached, because rawMessage and MarkRead switch on exactly these types.
+func (c *Client) remember(r resolved, keys ...string) {
+	switch r.input.(type) {
+	case *tg.InputPeerUser, *tg.InputPeerChat, *tg.InputPeerChannel:
+		for _, key := range append(keys, r.info.ID) {
+			c.peers.Store(key, r)
+		}
+	}
 }
 
 func normalize(raw string) (string, error) {
@@ -88,7 +101,7 @@ func (c *Client) resolve(ctx context.Context, raw string) (resolved, error) {
 				}
 				r := describe(d.Peer, e.Entities)
 				r.input = e.Peer
-				c.peers.Store(r.info.ID, r)
+				c.remember(r)
 				if r.info.ID == name {
 					return r, nil
 				}
@@ -101,10 +114,15 @@ func (c *Client) resolve(ctx context.Context, raw string) (resolved, error) {
 			}
 		}
 		if fallback != nil {
-			c.peers.Store(name, *fallback)
+			c.remember(*fallback, name)
 			return *fallback, nil
 		}
 		return resolved{}, fmt.Errorf("chat ID not found in account dialogs; use list_dialogs or a username")
+	}
+	// Telegram usernames are case-insensitive and never purely numeric.
+	key := strings.ToLower(name)
+	if r, ok := c.peers.Load(key); ok {
+		return r.(resolved), nil
 	}
 	r, err := c.api.ContactsResolveUsername(ctx, &tg.ContactsResolveUsernameRequest{Username: name})
 	if err != nil {
@@ -112,8 +130,11 @@ func (c *Client) resolve(ctx context.Context, raw string) (resolved, error) {
 	}
 	entities := peer.EntitiesFromResult(r)
 	info := describe(r.Peer, entities)
-	info.input, err = entities.ExtractPeer(r.Peer)
-	return info, err
+	if info.input, err = entities.ExtractPeer(r.Peer); err != nil {
+		return info, err
+	}
+	c.remember(info, key)
+	return info, nil
 }
 
 func describe(p tg.PeerClass, entities peer.Entities) resolved {
@@ -157,9 +178,11 @@ func (c *Client) Dialogs(ctx context.Context, limit int, archived bool) ([]domai
 		if !ok {
 			continue
 		}
-		info := describe(d.Peer, e.Entities).info
-		info.Unread = d.UnreadCount
-		chats = append(chats, info)
+		r := describe(d.Peer, e.Entities)
+		r.input = e.Peer
+		c.remember(r)
+		r.info.Unread = d.UnreadCount
+		chats = append(chats, r.info)
 	}
 	return chats, iter.Err()
 }

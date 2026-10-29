@@ -1,7 +1,13 @@
 // Package domain contains Telegram-independent application data.
 package domain
 
-import "time"
+import (
+	"math"
+	"time"
+)
+
+// MaxDownloadMB is the largest MB count whose byte size fits in int64.
+const MaxDownloadMB = math.MaxInt64 / (1 << 20)
 
 type Message struct {
 	ID                                  int

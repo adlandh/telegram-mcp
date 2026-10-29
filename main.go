@@ -69,7 +69,7 @@ func run(ctx context.Context, args []string) error {
 	var client *telegram.Client
 	var dispatcher tg.UpdateDispatcher
 	var server *mcp.Server
-	opts := fx.Options(providers(), fx.Populate(&cfg, &client, &dispatcher))
+	opts := fx.Options(providers(!setup), fx.Populate(&cfg, &client, &dispatcher))
 	if !setup {
 		opts = fx.Options(opts, fx.Populate(&server))
 	}
@@ -161,14 +161,12 @@ func serveHTTP(parent context.Context, ln net.Listener, token string, server *mc
 	return parent.Err()
 }
 
-func providers() fx.Option {
+func providers(serving bool) fx.Option {
 	return fx.Options(fx.NopLogger, fx.Provide(
 		config.Load,
 		tg.NewUpdateDispatcher,
 		func(cfg config.Config, dispatcher tg.UpdateDispatcher) *telegram.Client {
-			return telegram.NewClient(cfg.APIID, cfg.APIHash, telegram.Options{
-				SessionStorage: &atomicSessionStorage{FileStorage: session.FileStorage{Path: cfg.SessionPath}}, UpdateHandler: dispatcher,
-			})
+			return telegram.NewClient(cfg.APIID, cfg.APIHash, clientOptions(cfg, dispatcher, serving))
 		},
 		func(client *telegram.Client, cfg config.Config) port.Telegram {
 			return tgadapter.New(client, cfg.DownloadDir)
@@ -178,6 +176,18 @@ func providers() fx.Option {
 		},
 		mcpadapter.New,
 	))
+}
+
+// clientOptions retries short FLOOD_WAITs only while serving: setup must not repeat
+// login requests, because Telegram may silently drop codes after repeated requests.
+func clientOptions(cfg config.Config, dispatcher tg.UpdateDispatcher, serving bool) telegram.Options {
+	opts := telegram.Options{
+		SessionStorage: &atomicSessionStorage{FileStorage: session.FileStorage{Path: cfg.SessionPath}}, UpdateHandler: dispatcher,
+	}
+	if serving {
+		opts.Middlewares = []telegram.Middleware{tgadapter.FloodWait()}
+	}
+	return opts
 }
 
 // atomicSessionStorage replaces the session file via rename, so a crash or full disk

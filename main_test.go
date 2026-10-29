@@ -18,6 +18,7 @@ import (
 	"github.com/adlandh/telegram-mcp/internal/domain"
 	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
+	"github.com/gotd/td/tg"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.uber.org/fx"
 )
@@ -87,7 +88,7 @@ func TestValidateProviders(t *testing.T) {
 	t.Setenv("TELEGRAM_API_ID", "")
 	var client *telegram.Client
 	var server *mcp.Server
-	if err := fx.ValidateApp(providers(), fx.Populate(&client, &server)); err != nil {
+	if err := fx.ValidateApp(providers(true), fx.Populate(&client, &server)); err != nil {
 		t.Fatal(err)
 	}
 	if client != nil || server != nil {
@@ -107,7 +108,7 @@ func TestProviders(t *testing.T) {
 			var client *telegram.Client
 			var server *mcp.Server
 			constructed := false
-			opts := fx.Options(providers(), fx.Populate(&cfg, &client),
+			opts := fx.Options(providers(serving), fx.Populate(&cfg, &client),
 				fx.Decorate(func(s *mcp.Server) *mcp.Server { constructed = true; return s }))
 			if serving {
 				opts = fx.Options(opts, fx.Populate(&server))
@@ -120,6 +121,9 @@ func TestProviders(t *testing.T) {
 			}
 			if constructed != serving || (server != nil) != serving {
 				t.Fatal("incorrect MCP construction for mode")
+			}
+			if n := len(clientOptions(cfg, tg.NewUpdateDispatcher(), serving).Middlewares); (n == 1) != serving {
+				t.Fatalf("%d middlewares; FLOOD_WAIT retry must apply only while serving", n)
 			}
 			if _, err := os.Stat(sessionPath); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("graph created a session: %v", err)

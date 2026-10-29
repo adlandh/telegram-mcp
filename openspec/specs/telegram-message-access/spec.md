@@ -8,7 +8,7 @@ Read and discover the Telegram conversations available to the authenticated user
 
 ### Requirement: Resolve accessible chat identifiers
 
-Chat-scoped tools SHALL accept usernames with or without `@`, `t.me` username links with or without a scheme (including the `telegram.me` and `www.t.me` hosts), public message links, `t.me/s/name` links, private `t.me/c/channel/message` links, and marked numeric IDs represented as strings. Numeric lookup SHALL include main and archived dialogs and obtain the account's access information; resolved access information MAY be reused for the rest of the process lifetime. Positive IDs SHALL prefer a matching user and otherwise permit a matching channel fallback. Invite links SHALL fail without joining chats.
+Chat-scoped tools SHALL accept usernames with or without `@`, `t.me` username links with or without a scheme (including the `telegram.me` and `www.t.me` hosts), public message links, `t.me/s/name` links, private `t.me/c/channel/message` links, and marked numeric IDs represented as strings. Numeric lookup SHALL include main and archived dialogs and obtain the account's access information; resolved access information MAY be reused for the rest of the process lifetime. Successfully resolved usernames SHALL be reused for the rest of the process lifetime, matched case-insensitively, and a failed username lookup SHALL NOT be reused. Chats returned by `list_dialogs` and `list_folder_dialogs` SHALL be reusable by their marked IDs without another dialog scan. Positive IDs SHALL prefer a matching user and otherwise permit a matching channel fallback. Invite links SHALL fail without joining chats.
 
 #### Scenario: Resolve an archived private channel after restart
 
@@ -29,6 +29,21 @@ Chat-scoped tools SHALL accept usernames with or without `@`, `t.me` username li
 
 - **WHEN** a caller uses the same marked numeric ID in two consecutive tool calls
 - **THEN** the second call does not rescan the account's dialog lists
+
+#### Scenario: Repeated username lookup reuses access information
+
+- **WHEN** a caller names the same chat as `@Durov` and later as `t.me/durov`
+- **THEN** Telegram's username resolver is called only for the first of these calls
+
+#### Scenario: Failed username lookup is retried later
+
+- **WHEN** resolving a username fails and a later call uses the same username
+- **THEN** the later call asks Telegram to resolve it again
+
+#### Scenario: Listed dialog resolves without a rescan
+
+- **WHEN** `list_dialogs` or `list_folder_dialogs` returns a chat and a later call uses that chat's marked ID
+- **THEN** the later call does not scan the account's dialog lists
 
 ### Requirement: Read and search bounded message sets
 

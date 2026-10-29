@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/adlandh/telegram-mcp/internal/domain"
 )
 
 type Config struct {
@@ -44,7 +46,7 @@ func Load() (Config, error) {
 		return c, err
 	}
 	c.MaxDownloadMB, err = strconv.ParseInt(cmp.Or(os.Getenv("TELEGRAM_MAX_DOWNLOAD_MB"), "200"), 10, 64)
-	if err != nil || c.MaxDownloadMB < 0 || c.MaxDownloadMB > (1<<63-1)/(1024*1024) {
+	if err != nil || c.MaxDownloadMB < 0 || c.MaxDownloadMB > domain.MaxDownloadMB {
 		return c, fmt.Errorf("TELEGRAM_MAX_DOWNLOAD_MB must be a non-negative integer within int64 byte range")
 	}
 	c.RequestTimeout, err = time.ParseDuration(cmp.Or(os.Getenv("TELEGRAM_REQUEST_TIMEOUT"), "5m"))

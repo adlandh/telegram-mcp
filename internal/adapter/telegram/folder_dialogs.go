@@ -138,6 +138,7 @@ func (c *Client) FolderDialogs(ctx context.Context, folderID, limit int) ([]doma
 	}
 	result := make([]domain.Chat, 0, min(limit, len(ordered)+100))
 	available := map[string]folderDialog{}
+	emitted := map[string]bool{}
 	for offset := 0; offset < len(ordered) && len(result) < limit; offset += 100 {
 		batch := ordered[offset:min(offset+100, len(ordered))]
 		requests := make([]tg.InputDialogPeerClass, 0, len(batch))
@@ -184,11 +185,15 @@ func (c *Client) FolderDialogs(ctx context.Context, folderID, limit int) ([]doma
 				}
 			}
 			d, ok := available[key]
-			if !ok || !d.known || seen["output:"+key] || deny[key] || (deny["self"] && d.isSelf()) {
+			if !ok || !d.known || emitted[key] || deny[key] || (deny["self"] && d.isSelf()) {
 				continue
 			}
+			// Folder entries may be InputPeerSelf or *FromMessage, which remember skips;
+			// the response entities give the plain peer with its access hash.
+			d.input, _ = d.users.ExtractPeer(d.dialog.Peer)
+			c.remember(d.resolved)
 			result = append(result, d.info)
-			seen["output:"+key] = true
+			emitted[key] = true
 			if len(result) == limit {
 				return result, nil
 			}
@@ -213,7 +218,7 @@ func (c *Client) FolderDialogs(ctx context.Context, folderID, limit int) ([]doma
 			}
 			candidate := folderDialogFrom(d, e.Entities)
 			key := candidate.info.ID
-			if key == "" || seen["output:"+key] || deny[key] {
+			if key == "" || emitted[key] || deny[key] {
 				continue
 			}
 			if deny["self"] && candidate.isSelf() {
@@ -247,8 +252,10 @@ func (c *Client) FolderDialogs(ctx context.Context, folderID, limit int) ([]doma
 					continue
 				}
 			}
+			candidate.input = e.Peer
+			c.remember(candidate.resolved)
 			result = append(result, candidate.info)
-			seen["output:"+key] = true
+			emitted[key] = true
 		}
 		if err := iter.Err(); err != nil {
 			return nil, fmt.Errorf("get folder dialogs: %w", err)

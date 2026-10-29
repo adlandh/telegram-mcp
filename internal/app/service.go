@@ -5,9 +5,11 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/adlandh/telegram-mcp/internal/domain"
 	"github.com/adlandh/telegram-mcp/internal/port"
@@ -74,8 +76,8 @@ func (s *Service) Execute(ctx context.Context, name string, a Arguments) (string
 		lines := make([]string, 0, len(msgs))
 		maxID := q.SinceID
 		for _, m := range msgs {
-			if r := []rune(m.Text); a.MaxTextChars > 0 && len(r) > a.MaxTextChars {
-				m.Text = string(r[:a.MaxTextChars]) + " [truncated]"
+			if a.MaxTextChars > 0 && utf8.RuneCountInString(m.Text) > a.MaxTextChars {
+				m.Text = string([]rune(m.Text)[:a.MaxTextChars]) + " [truncated]"
 			}
 			line := formatMessage(m)
 			if q.Global {
@@ -163,7 +165,7 @@ func (s *Service) Execute(ctx context.Context, name string, a Arguments) (string
 		}
 		return fmt.Sprintf("Marked as read up to message #%d [id:%s]", upTo, chatID), nil
 	case "download_media", "get_thumbnail":
-		if a.MaxMB != nil && (*a.MaxMB < 0 || *a.MaxMB > (1<<63-1)/(1024*1024)) {
+		if a.MaxMB != nil && (*a.MaxMB < 0 || *a.MaxMB > domain.MaxDownloadMB) {
 			return "", fmt.Errorf("maxMB must be non-negative and fit into int64 bytes")
 		}
 		// The configured limit is a ceiling: callers may only lower it; 0 keeps it.
@@ -211,24 +213,24 @@ func validate(name string, a *Arguments) error {
 	if (name == "search_messages" || name == "global_search") && a.Query == "" {
 		return fmt.Errorf("query is required")
 	}
-	if name == "fetch_since" && (a.SinceID == nil || *a.SinceID < 0 || *a.SinceID >= 1<<31-1) {
+	if name == "fetch_since" && (a.SinceID == nil || *a.SinceID < 0 || *a.SinceID >= math.MaxInt32) {
 		return fmt.Errorf("sinceId must be between 0 and 2147483646")
 	}
 	// 0 means beforeId was omitted: read from the latest message.
-	if a.BeforeID < 0 || a.BeforeID > 1<<31-1 {
+	if a.BeforeID < 0 || a.BeforeID > math.MaxInt32 {
 		return fmt.Errorf("beforeId must be between 1 and 2147483647")
 	}
-	if name == "list_folder_dialogs" && (a.FolderID < 2 || a.FolderID > 1<<31-1) {
+	if name == "list_folder_dialogs" && (a.FolderID < 2 || a.FolderID > math.MaxInt32) {
 		return fmt.Errorf("folderId must be between 2 and 2147483647")
 	}
 	switch name {
 	case "get_message", "get_media_info", "download_media", "get_thumbnail", "view_thumbnail":
-		if a.MessageID <= 0 || a.MessageID > 1<<31-1 {
+		if a.MessageID <= 0 || a.MessageID > math.MaxInt32 {
 			return fmt.Errorf("messageId must be a positive 32-bit integer")
 		}
 	case "mark_read":
 		// 0 means messageId was omitted: mark the whole chat.
-		if a.MessageID < 0 || a.MessageID > 1<<31-1 {
+		if a.MessageID < 0 || a.MessageID > math.MaxInt32 {
 			return fmt.Errorf("messageId must be a positive 32-bit integer")
 		}
 	}

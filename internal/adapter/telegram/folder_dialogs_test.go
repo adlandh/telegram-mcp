@@ -48,6 +48,7 @@ func TestFolderDialogsExplicitAndShared(t *testing.T) {
 			if err != nil || calls != 1 || len(got) != 2 || got[0].ID != "-1000000000007" || got[0].Unread != 3 || got[1].ID != "-7" {
 				t.Fatalf("explicit folder: %+v, calls=%d, err=%v", got, calls, err)
 			}
+			assertCachedWithoutRPC(t, c, got[0].ID, got[1].ID)
 		})
 	}
 }
@@ -113,6 +114,9 @@ func TestFolderDialogsCategories(t *testing.T) {
 			got, err := c.FolderDialogs(t.Context(), 2, 1)
 			if err != nil || (len(got) == 1) != tc.want {
 				t.Fatalf("category got %+v, want %t, err %v", got, tc.want, err)
+			}
+			if tc.want {
+				assertCachedWithoutRPC(t, c, got[0].ID)
 			}
 		})
 	}
@@ -184,6 +188,42 @@ func TestFolderDialogsSelfPeerIsDeduplicated(t *testing.T) {
 	got, err := c.FolderDialogs(t.Context(), 2, 10)
 	if err != nil || len(got) != 1 || got[0].ID != "5" {
 		t.Fatalf("self peer: %+v, %v", got, err)
+	}
+	assertCachedWithoutRPC(t, c, "5")
+}
+
+func TestFolderDialogsCachesFromMessagePeers(t *testing.T) {
+	ref := &tg.InputPeerChat{ChatID: 1}
+	c := &Client{api: tg.NewClient(invokeFunc(func(_ context.Context, in bin.Encoder, out bin.Decoder) error {
+		switch in.(type) {
+		case *tg.MessagesGetDialogFiltersRequest:
+			out.(*tg.MessagesDialogFilters).Filters = []tg.DialogFilterClass{&tg.DialogFilter{ID: 2, IncludePeers: []tg.InputPeerClass{
+				&tg.InputPeerUserFromMessage{Peer: ref, MsgID: 1, UserID: 5},
+				&tg.InputPeerChannelFromMessage{Peer: ref, MsgID: 1, ChannelID: 7},
+			}}}
+		case *tg.MessagesGetPeerDialogsRequest:
+			*out.(*tg.MessagesPeerDialogs) = tg.MessagesPeerDialogs{
+				Dialogs: []tg.DialogClass{&tg.Dialog{Peer: &tg.PeerUser{UserID: 5}}, &tg.Dialog{Peer: &tg.PeerChannel{ChannelID: 7}}},
+				Users:   []tg.UserClass{&tg.User{ID: 5, AccessHash: 50, FirstName: "Ann"}},
+				Chats:   []tg.ChatClass{&tg.Channel{ID: 7, AccessHash: 70, Title: "News"}},
+			}
+		default:
+			t.Fatalf("unexpected RPC %T", in)
+		}
+		return nil
+	}))}
+	got, err := c.FolderDialogs(t.Context(), 2, 10)
+	if err != nil || len(got) != 2 || got[0].ID != "5" || got[1].ID != "-1000000000007" {
+		t.Fatalf("from-message peers: %+v, %v", got, err)
+	}
+	assertCachedWithoutRPC(t, c, "5", "-1000000000007")
+	user, _ := c.peers.Load("5")
+	channel, _ := c.peers.Load("-1000000000007")
+	if u, ok := user.(resolved).input.(*tg.InputPeerUser); !ok || u.AccessHash != 50 {
+		t.Fatalf("user cached as %T", user.(resolved).input)
+	}
+	if ch, ok := channel.(resolved).input.(*tg.InputPeerChannel); !ok || ch.AccessHash != 70 {
+		t.Fatalf("channel cached as %T", channel.(resolved).input)
 	}
 }
 
@@ -333,5 +373,19 @@ func TestFolderDialogsPropagatesFailures(t *testing.T) {
 				t.Fatalf("failure returned %+v, %v", got, err)
 			}
 		})
+	}
+}
+
+// assertCachedWithoutRPC checks that ids listed earlier resolve from the cache.
+func assertCachedWithoutRPC(t *testing.T, c *Client, ids ...string) {
+	t.Helper()
+	c.api = tg.NewClient(invokeFunc(func(_ context.Context, in bin.Encoder, _ bin.Decoder) error {
+		t.Fatalf("listed dialog triggered RPC %T", in)
+		return nil
+	}))
+	for _, id := range ids {
+		if r, err := c.resolve(t.Context(), id); err != nil || r.info.ID != id {
+			t.Fatalf("resolve %s: %+v, %v", id, r, err)
+		}
 	}
 }
