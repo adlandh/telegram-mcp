@@ -7,7 +7,7 @@ import (
 	"github.com/gotd/td/tg"
 )
 
-// MarkRead is the only operation that changes Telegram account state.
+// MarkRead and SaveDraft are the only operations that change Telegram account state.
 func (c *Client) MarkRead(ctx context.Context, chat string, messageID int) (string, int, error) {
 	r, err := c.resolve(ctx, chat)
 	if err != nil {

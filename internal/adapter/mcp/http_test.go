@@ -81,7 +81,7 @@ func TestHTTPHandler(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = cs.Close() })
 	tools, err := cs.ListTools(t.Context(), nil)
-	if err != nil || len(tools.Tools) != 15 {
+	if err != nil || len(tools.Tools) != 17 {
 		t.Fatalf("tools: %v, %v", tools, err)
 	}
 	r, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: "list_folders", Arguments: map[string]any{}})

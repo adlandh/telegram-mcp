@@ -266,3 +266,57 @@ Dialogs SHALL appear at most once. Pinned peers SHALL appear first in folder ord
 
 - **WHEN** retrieving filters, dialog pages, or required notification settings fails or is cancelled
 - **THEN** the tool returns an error without presenting partial membership as success
+
+### Requirement: Identify the current account
+
+`get_me` SHALL return the authenticated account's marked ID, display name (first and last name), and username when one is set. It SHALL NOT return the account's phone number. It SHALL NOT alter Telegram account state, and Telegram failures, deadlines and cancellation SHALL return tool errors.
+
+#### Scenario: Account details are returned
+
+- **WHEN** a caller invokes `get_me` for an account named "Ann Lee" with username `annlee`
+- **THEN** the result contains the account's marked ID, "Ann Lee" and `@annlee`
+- **AND** it contains no phone number
+
+#### Scenario: Account without username
+
+- **WHEN** the account has no username
+- **THEN** the result marks the username as unavailable and still contains the ID and name
+
+### Requirement: Unread-only dialog filtering
+
+`list_dialogs` and `list_folder_dialogs` SHALL accept optional boolean `unreadOnly`. When true, only dialogs with a positive unread count or a manual "marked as unread" flag SHALL be returned, and `limit` SHALL count those matching dialogs, not scanned ones. Omitted or false SHALL keep current results. Existing archive and folder selection, ordering and limits SHALL otherwise apply unchanged.
+
+#### Scenario: Read chats are omitted
+
+- **WHEN** the main list holds chats A (3 unread), B (0 unread) and C (0 unread, marked unread) and a caller invokes `list_dialogs` with `unreadOnly=true`
+- **THEN** the result contains A and C but not B
+
+#### Scenario: Limit counts matching dialogs
+
+- **WHEN** the first 100 dialogs are read, later dialogs are unread, and a caller invokes `list_dialogs` with `unreadOnly=true` and `limit=5`
+- **THEN** the tool keeps scanning and returns up to 5 unread dialogs
+
+#### Scenario: Archive selection still applies
+
+- **WHEN** a caller invokes `list_dialogs` with `archived=true` and `unreadOnly=true`
+- **THEN** only unread archived dialogs are returned
+
+#### Scenario: Folder dialogs filter after membership
+
+- **WHEN** a caller invokes `list_folder_dialogs` with `unreadOnly=true`
+- **THEN** only folder members that are unread are returned, in folder order
+- **AND** an existing folder without unread members returns explanatory empty text, not an error
+
+#### Scenario: Default behavior is unchanged
+
+- **WHEN** a caller omits `unreadOnly`
+- **THEN** read and unread dialogs are listed as before
+
+### Requirement: Show manual unread marks in dialog lists
+
+Each dialog line from `list_dialogs` and `list_folder_dialogs` SHALL indicate when the chat carries a manual "marked as unread" flag, in addition to its unread count.
+
+#### Scenario: Manually marked chat
+
+- **WHEN** a chat has 0 unread messages and is manually marked unread
+- **THEN** its dialog line shows 0 unread and the manual unread mark

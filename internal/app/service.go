@@ -24,7 +24,11 @@ type Arguments struct {
 	MessageID int    `json:"messageId,omitempty"`
 	FolderID  int    `json:"folderId,omitempty"`
 	Archived  bool   `json:"archived,omitempty"`
-	MaxMB     *int64 `json:"maxMB,omitempty"`
+	// UnreadOnly keeps only chats with unread messages or a manual unread mark.
+	UnreadOnly bool   `json:"unreadOnly,omitempty"`
+	MaxMB      *int64 `json:"maxMB,omitempty"`
+	// Text is a save_draft draft, stored exactly as given.
+	Text string `json:"text,omitempty"`
 	// MaxTextChars caps each listed message's text in runes; 0 means no cap.
 	MaxTextChars int `json:"maxTextChars,omitempty"`
 }
@@ -130,14 +134,20 @@ func (s *Service) Execute(ctx context.Context, name string, a Arguments) (string
 			return "", err
 		}
 		return fmt.Sprintf("Title: %s\nID: %s\nUsername: %s\nMembers: %s\nType: %s\nAbout: %s", c.Title, c.ID, c.Username, optional(c.Members), c.Type, c.About), nil
+	case "get_me":
+		c, err := s.telegram.Self(ctx)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("ID: %s\nName: %s\nUsername: %s", c.ID, c.Title, cmp.Or(c.Username, "N/A")), nil
 	case "list_dialogs":
-		chats, err := s.telegram.Dialogs(ctx, limit(100, 500), a.Archived)
+		chats, err := s.telegram.Dialogs(ctx, limit(100, 500), a.Archived, a.UnreadOnly)
 		if err != nil {
 			return "", err
 		}
 		return formatDialogs(chats), nil
 	case "list_folder_dialogs":
-		chats, err := s.telegram.FolderDialogs(ctx, a.FolderID, limit(100, 500))
+		chats, err := s.telegram.FolderDialogs(ctx, a.FolderID, limit(100, 500), a.UnreadOnly)
 		if err != nil {
 			return "", err
 		}
@@ -164,6 +174,12 @@ func (s *Service) Execute(ctx context.Context, name string, a Arguments) (string
 			return fmt.Sprintf("(no messages to mark as read) [id:%s]", chatID), nil
 		}
 		return fmt.Sprintf("Marked as read up to message #%d [id:%s]", upTo, chatID), nil
+	case "save_draft":
+		chatID, err := s.telegram.SaveDraft(ctx, a.GroupURL, a.Text)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Draft saved (not sent) [id:%s]", chatID), nil
 	case "download_media", "get_thumbnail":
 		if a.MaxMB != nil && (*a.MaxMB < 0 || *a.MaxMB > domain.MaxDownloadMB) {
 			return "", fmt.Errorf("maxMB must be non-negative and fit into int64 bytes")
@@ -196,8 +212,8 @@ func (s *Service) ViewThumbnail(ctx context.Context, a Arguments) (domain.Image,
 func validate(name string, a *Arguments) error {
 	a.GroupURL, a.Query = strings.TrimSpace(a.GroupURL), strings.TrimSpace(a.Query)
 	switch name {
-	case "global_search", "list_dialogs", "list_folders", "list_folder_dialogs":
-	case "read_messages", "search_messages", "get_group_info", "fetch_since", "get_message", "get_pinned", "get_media_info", "download_media", "get_thumbnail", "view_thumbnail", "mark_read":
+	case "global_search", "get_me", "list_dialogs", "list_folders", "list_folder_dialogs":
+	case "read_messages", "search_messages", "get_group_info", "fetch_since", "get_message", "get_pinned", "get_media_info", "download_media", "get_thumbnail", "view_thumbnail", "mark_read", "save_draft":
 		if a.GroupURL == "" {
 			return fmt.Errorf("groupUrl is required")
 		}
@@ -209,6 +225,10 @@ func validate(name string, a *Arguments) error {
 	}
 	if a.MaxTextChars < 0 {
 		return fmt.Errorf("maxTextChars must be positive")
+	}
+	// Drafts keep surrounding whitespace; only blank text is rejected.
+	if name == "save_draft" && (strings.TrimSpace(a.Text) == "" || utf8.RuneCountInString(a.Text) > 4096) {
+		return fmt.Errorf("text must be non-blank and at most 4096 characters")
 	}
 	if (name == "search_messages" || name == "global_search") && a.Query == "" {
 		return fmt.Errorf("query is required")
@@ -247,7 +267,11 @@ func optional(n *int) string {
 func formatDialogs(chats []domain.Chat) string {
 	lines := []string{fmt.Sprintf("%d dialogs:", len(chats))}
 	for _, c := range chats {
-		lines = append(lines, fmt.Sprintf("%s: %s %s (%d unread) [id:%s]", c.Type, c.Title, c.Username, c.Unread, c.ID))
+		mark := ""
+		if c.UnreadMark {
+			mark = ", marked unread"
+		}
+		lines = append(lines, fmt.Sprintf("%s: %s %s (%d unread%s) [id:%s]", c.Type, c.Title, c.Username, c.Unread, mark, c.ID))
 	}
 	return strings.Join(lines, "\n")
 }

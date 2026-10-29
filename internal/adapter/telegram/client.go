@@ -165,12 +165,17 @@ func describe(p tg.PeerClass, entities peer.Entities) resolved {
 	return r
 }
 
-func (c *Client) Dialogs(ctx context.Context, limit int, archived bool) ([]domain.Chat, error) {
+func (c *Client) Dialogs(ctx context.Context, limit int, archived, unreadOnly bool) ([]domain.Chat, error) {
 	folder := 0
 	if archived {
 		folder = 1
 	}
-	iter := query.GetDialogs(c.api).FolderID(folder).BatchSize(min(limit, 100)).Iter()
+	batch := min(limit, 100)
+	if unreadOnly {
+		// Read chats are skipped, so small pages would only add round trips.
+		batch = 100
+	}
+	iter := query.GetDialogs(c.api).FolderID(folder).BatchSize(batch).Iter()
 	chats := make([]domain.Chat, 0, limit)
 	for len(chats) < limit && iter.Next(ctx) {
 		e := iter.Value()
@@ -181,7 +186,10 @@ func (c *Client) Dialogs(ctx context.Context, limit int, archived bool) ([]domai
 		r := describe(d.Peer, e.Entities)
 		r.input = e.Peer
 		c.remember(r)
-		r.info.Unread = d.UnreadCount
+		r.info.Unread, r.info.UnreadMark = d.UnreadCount, d.UnreadMark
+		if unreadOnly && !r.info.HasUnread() {
+			continue
+		}
 		chats = append(chats, r.info)
 	}
 	return chats, iter.Err()
@@ -211,6 +219,20 @@ func explicitCount(pinned, included []tg.InputPeerClass) int {
 		seen[folderInputKey(p)] = true
 	}
 	return len(seen)
+}
+
+// Self returns the authenticated account; the phone number is deliberately dropped.
+func (c *Client) Self(ctx context.Context) (domain.Chat, error) {
+	users, err := c.api.UsersGetUsers(ctx, []tg.InputUserClass{&tg.InputUserSelf{}})
+	if err != nil {
+		return domain.Chat{}, fmt.Errorf("get account: %w", err)
+	}
+	for _, u := range users {
+		if u, ok := u.(*tg.User); ok {
+			return describe(&tg.PeerUser{UserID: u.ID}, peer.NewEntities(map[int64]*tg.User{u.ID: u}, nil, nil)).info, nil
+		}
+	}
+	return domain.Chat{}, fmt.Errorf("telegram returned no account")
 }
 
 func (c *Client) Chat(ctx context.Context, name string) (domain.Chat, error) {
