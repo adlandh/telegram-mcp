@@ -73,6 +73,8 @@ func TestMCPContract(t *testing.T) {
 		default:
 			args["groupUrl"] = "@test"
 			switch tool.Name {
+			case "read_messages":
+				args["unreadOnly"] = true
 			case "search_messages":
 				args["query"] = "hello"
 			case "fetch_since":
@@ -138,14 +140,17 @@ func TestMCPContract(t *testing.T) {
 	}
 	for _, tool := range tools.Tools {
 		p, ok := tool.InputSchema.(map[string]any)["properties"].(map[string]any)["unreadOnly"]
-		if want := tool.Name == "list_dialogs" || tool.Name == "list_folder_dialogs"; ok != want || (ok && p.(map[string]any)["type"] != "boolean") {
+		if want := slices.Contains([]string{"read_messages", "list_dialogs", "list_folder_dialogs"}, tool.Name); ok != want || (ok && p.(map[string]any)["type"] != "boolean") {
 			t.Errorf("%s: unreadOnly schema %v", tool.Name, p)
 		}
 	}
-	for _, args := range []map[string]any{{"unreadOnly": "yes"}, {"unreadOnly": 1}, {"folderId": 2, "unreadOnly": "yes"}, {"folderId": 2, "unreadOnly": 1}} {
+	for _, args := range []map[string]any{{"unreadOnly": "yes"}, {"unreadOnly": 1}, {"folderId": 2, "unreadOnly": "yes"}, {"folderId": 2, "unreadOnly": 1}, {"groupUrl": "@test", "unreadOnly": "yes"}, {"groupUrl": "@test", "unreadOnly": 1}} {
 		name := "list_dialogs"
 		if _, ok := args["folderId"]; ok {
 			name = "list_folder_dialogs"
+		}
+		if _, ok := args["groupUrl"]; ok {
+			name = "read_messages"
 		}
 		before := calls
 		r, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: name, Arguments: args})

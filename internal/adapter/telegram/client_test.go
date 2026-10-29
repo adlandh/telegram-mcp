@@ -63,12 +63,18 @@ func TestFoldersExposeIDs(t *testing.T) {
 
 // historyClient models Telegram's descending IDs, offset_id + add_offset slicing
 // and min_id post-filtering for history and chat search, where every message matches.
-func historyClient(history []int) *Client {
+// dialog is the chat's dialog for read-state lookups; nil means the account has none.
+func historyClient(history []int, dialog *tg.Dialog) *Client {
 	return &Client{api: tg.NewClient(invokeFunc(func(_ context.Context, in bin.Encoder, out bin.Decoder) error {
 		var offsetID, addOffset, limit, minID int
 		switch req := in.(type) {
 		case *tg.ContactsResolveUsernameRequest:
 			*out.(*tg.ContactsResolvedPeer) = tg.ContactsResolvedPeer{Peer: &tg.PeerChannel{ChannelID: 1}, Chats: []tg.ChatClass{&tg.Channel{ID: 1, AccessHash: 2, Title: "test"}}}
+			return nil
+		case *tg.MessagesGetPeerDialogsRequest:
+			if dialog != nil {
+				out.(*tg.MessagesPeerDialogs).Dialogs = []tg.DialogClass{dialog}
+			}
 			return nil
 		case *tg.MessagesGetHistoryRequest:
 			offsetID, addOffset, limit, minID = req.OffsetID, req.AddOffset, req.Limit, req.MinID
@@ -116,7 +122,7 @@ func gappedHistory() []int {
 
 func TestHistoryPaginationDoesNotLoseBacklog(t *testing.T) {
 	history := gappedHistory()
-	c := historyClient(history)
+	c := historyClient(history, nil)
 	var got []int
 	cursor := 0
 	for range 5 {
@@ -146,9 +152,89 @@ func TestHistoryPaginationDoesNotLoseBacklog(t *testing.T) {
 	}
 }
 
+func TestUnreadMessagesStartAfterReadCursor(t *testing.T) {
+	history := []int{15, 14, 13, 12, 11, 10}
+	c := historyClient(history, &tg.Dialog{Peer: &tg.PeerChannel{ChannelID: 1}, ReadInboxMaxID: 12})
+	msgs, err := c.Messages(t.Context(), domain.MessageQuery{Chat: "test", Unread: true, Limit: 2})
+	if err != nil || len(msgs) != 2 || msgs[0].ID != 13 || msgs[1].ID != 14 {
+		t.Fatalf("unread: %+v, %v", msgs, err)
+	}
+	if _, err := historyClient(history, nil).Messages(t.Context(), domain.MessageQuery{Chat: "test", Unread: true, Limit: 50}); err == nil {
+		t.Fatal("missing dialog read history without a read cursor")
+	}
+}
+
+func TestUnreadBacklogContinuesWithFetchSince(t *testing.T) {
+	history := gappedHistory()
+	c := historyClient(history, &tg.Dialog{Peer: &tg.PeerChannel{ChannelID: 1}, ReadInboxMaxID: 100})
+	var want []int
+	for _, id := range slices.Backward(history) {
+		if id > 100 {
+			want = append(want, id)
+		}
+	}
+	msgs, err := c.Messages(t.Context(), domain.MessageQuery{Chat: "test", Unread: true, Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []int
+	for _, m := range msgs {
+		got = append(got, m.ID)
+	}
+	if !slices.Equal(got, want[:50]) {
+		t.Fatalf("first unread page: got %v, want %v", got, want[:50])
+	}
+	for range 10 {
+		msgs, err := c.Messages(t.Context(), domain.MessageQuery{Chat: "test", Since: true, SinceID: got[len(got)-1], Limit: 200})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(msgs) == 0 {
+			break
+		}
+		for _, m := range msgs {
+			got = append(got, m.ID)
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("lost or duplicated unread messages: got %d, want %d", len(got), len(want))
+	}
+}
+
+func TestUnreadFollowsReadCursor(t *testing.T) {
+	history := []int{15, 14, 13, 12, 11, 10}
+	dialog := &tg.Dialog{Peer: &tg.PeerChannel{ChannelID: 1}, ReadInboxMaxID: 15, UnreadMark: true}
+	c := historyClient(history, dialog)
+	unread := func() []domain.Message {
+		t.Helper()
+		msgs, err := c.Messages(t.Context(), domain.MessageQuery{Chat: "test", Unread: true, Limit: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return msgs
+	}
+	if msgs := unread(); len(msgs) != 0 {
+		t.Fatalf("fully read chat returned %+v", msgs)
+	}
+	// mark_read moves Telegram's cursor; the next unread read starts after it.
+	dialog.ReadInboxMaxID = 12
+	if msgs := unread(); len(msgs) != 1 || msgs[0].ID != 13 {
+		t.Fatalf("after cursor 12: %+v", msgs)
+	}
+	dialog.ReadInboxMaxID = 13
+	if msgs := unread(); len(msgs) != 1 || msgs[0].ID != 14 {
+		t.Fatalf("after cursor 13: %+v", msgs)
+	}
+	// markReadClient fails the test on any RPC other than the dialog lookup.
+	failing, _ := markReadClient(t, &tg.InputPeerChat{ChatID: 5}, nil, "dialogs unavailable")
+	if _, err := failing.Messages(t.Context(), domain.MessageQuery{Chat: "-5", Unread: true, Limit: 50}); err == nil {
+		t.Fatal("dialog lookup failure was not reported")
+	}
+}
+
 func TestBackwardPaginationDoesNotLoseHistory(t *testing.T) {
 	history := gappedHistory()
-	c := historyClient(history)
+	c := historyClient(history, nil)
 	for _, search := range []string{"", "hit"} {
 		var got []int
 		before := 0

@@ -118,6 +118,27 @@ func TestMessageOrderingLimitsAndMetadata(t *testing.T) {
 	}
 }
 
+func TestUnreadMessages(t *testing.T) {
+	f := &fakeTelegram{}
+	s := New(f, 200, time.Minute)
+	text, err := s.Execute(t.Context(), "read_messages", Arguments{GroupURL: "@test", UnreadOnly: true})
+	if err != nil || !f.query.Unread || f.query.Limit != 50 {
+		t.Fatalf("query %+v, %v", f.query, err)
+	}
+	if !strings.HasPrefix(text, "Unread messages (maxId=12):\n#11 ") || strings.Contains(text, "nextBeforeId") {
+		t.Fatalf("unread text: %s", text)
+	}
+	f.noMessages = true
+	if text, _ := s.Execute(t.Context(), "read_messages", Arguments{GroupURL: "@test", UnreadOnly: true}); text != "(no unread messages)" {
+		t.Fatalf("empty unread text: %s", text)
+	}
+	f.noMessages = false
+	text, _ = s.Execute(t.Context(), "read_messages", Arguments{GroupURL: "@test"})
+	if f.query.Unread || !strings.HasPrefix(text, "Messages (nextBeforeId=11):") {
+		t.Fatalf("default read changed: %+v %s", f.query, text)
+	}
+}
+
 func TestBackwardCursor(t *testing.T) {
 	f := &fakeTelegram{}
 	s := New(f, 200, time.Minute)
@@ -171,6 +192,7 @@ func TestRejectInvalidArgumentsBeforeCallingTelegram(t *testing.T) {
 		{"fetch_since", Arguments{GroupURL: "x"}},
 		{"fetch_since", Arguments{GroupURL: "x", SinceID: new(-1)}},
 		{"read_messages", Arguments{GroupURL: "x", BeforeID: -1}},
+		{"read_messages", Arguments{GroupURL: "x", BeforeID: 500, UnreadOnly: true}},
 		{"read_messages", Arguments{GroupURL: "x", MaxTextChars: -1}},
 		{"search_messages", Arguments{GroupURL: "x", Query: "q", BeforeID: 1 << 31}},
 		{"list_folder_dialogs", Arguments{}},
@@ -355,6 +377,7 @@ func TestOtherToolsDoNotMarkRead(t *testing.T) {
 	for _, name := range []string{"read_messages", "search_messages", "fetch_since", "get_pinned", "global_search", "list_folders", "list_folder_dialogs", "download_media", "get_thumbnail", "save_draft"} {
 		_, _ = s.Execute(t.Context(), name, Arguments{GroupURL: "@x", Query: "q", SinceID: new(0), MessageID: 1, FolderID: 2, Text: "draft"})
 	}
+	_, _ = s.Execute(t.Context(), "read_messages", Arguments{GroupURL: "@x", UnreadOnly: true})
 	if f.markCalls != 0 {
 		t.Fatalf("read tools called MarkRead %d times", f.markCalls)
 	}
