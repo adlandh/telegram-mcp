@@ -189,6 +189,7 @@ func TestFolderDialogsSelfPeerIsDeduplicated(t *testing.T) {
 	if err != nil || len(got) != 1 || got[0].ID != "5" {
 		t.Fatalf("self peer: %+v, %v", got, err)
 	}
+	assertCachedWithoutRPC(t, c, "5")
 }
 
 func TestFolderDialogsRulesAndPagination(t *testing.T) {

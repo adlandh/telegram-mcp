@@ -188,7 +188,9 @@ func (c *Client) FolderDialogs(ctx context.Context, folderID, limit int) ([]doma
 			if !ok || !d.known || emitted[key] || deny[key] || (deny["self"] && d.isSelf()) {
 				continue
 			}
-			d.input = p
+			// Folder entries may be InputPeerSelf or *FromMessage, which remember skips;
+			// the response entities give the plain peer with its access hash.
+			d.input, _ = d.users.ExtractPeer(d.dialog.Peer)
 			c.remember(d.resolved)
 			result = append(result, d.info)
 			emitted[key] = true
