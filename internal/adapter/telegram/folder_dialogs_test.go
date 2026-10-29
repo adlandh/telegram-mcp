@@ -192,6 +192,41 @@ func TestFolderDialogsSelfPeerIsDeduplicated(t *testing.T) {
 	assertCachedWithoutRPC(t, c, "5")
 }
 
+func TestFolderDialogsCachesFromMessagePeers(t *testing.T) {
+	ref := &tg.InputPeerChat{ChatID: 1}
+	c := &Client{api: tg.NewClient(invokeFunc(func(_ context.Context, in bin.Encoder, out bin.Decoder) error {
+		switch in.(type) {
+		case *tg.MessagesGetDialogFiltersRequest:
+			out.(*tg.MessagesDialogFilters).Filters = []tg.DialogFilterClass{&tg.DialogFilter{ID: 2, IncludePeers: []tg.InputPeerClass{
+				&tg.InputPeerUserFromMessage{Peer: ref, MsgID: 1, UserID: 5},
+				&tg.InputPeerChannelFromMessage{Peer: ref, MsgID: 1, ChannelID: 7},
+			}}}
+		case *tg.MessagesGetPeerDialogsRequest:
+			*out.(*tg.MessagesPeerDialogs) = tg.MessagesPeerDialogs{
+				Dialogs: []tg.DialogClass{&tg.Dialog{Peer: &tg.PeerUser{UserID: 5}}, &tg.Dialog{Peer: &tg.PeerChannel{ChannelID: 7}}},
+				Users:   []tg.UserClass{&tg.User{ID: 5, AccessHash: 50, FirstName: "Ann"}},
+				Chats:   []tg.ChatClass{&tg.Channel{ID: 7, AccessHash: 70, Title: "News"}},
+			}
+		default:
+			t.Fatalf("unexpected RPC %T", in)
+		}
+		return nil
+	}))}
+	got, err := c.FolderDialogs(t.Context(), 2, 10)
+	if err != nil || len(got) != 2 || got[0].ID != "5" || got[1].ID != "-1000000000007" {
+		t.Fatalf("from-message peers: %+v, %v", got, err)
+	}
+	assertCachedWithoutRPC(t, c, "5", "-1000000000007")
+	user, _ := c.peers.Load("5")
+	channel, _ := c.peers.Load("-1000000000007")
+	if u, ok := user.(resolved).input.(*tg.InputPeerUser); !ok || u.AccessHash != 50 {
+		t.Fatalf("user cached as %T", user.(resolved).input)
+	}
+	if ch, ok := channel.(resolved).input.(*tg.InputPeerChannel); !ok || ch.AccessHash != 70 {
+		t.Fatalf("channel cached as %T", channel.(resolved).input)
+	}
+}
+
 func TestFolderDialogsRulesAndPagination(t *testing.T) {
 	archived := []int{}
 	requests := 0
