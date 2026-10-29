@@ -24,7 +24,8 @@ type Arguments struct {
 	MessageID int    `json:"messageId,omitempty"`
 	FolderID  int    `json:"folderId,omitempty"`
 	Archived  bool   `json:"archived,omitempty"`
-	// UnreadOnly keeps only chats with unread messages or a manual unread mark.
+	// UnreadOnly keeps only chats with unread messages or a manual unread mark;
+	// on read_messages it selects messages after the chat's read cursor.
 	UnreadOnly bool   `json:"unreadOnly,omitempty"`
 	MaxMB      *int64 `json:"maxMB,omitempty"`
 	// Text is a save_draft draft, stored exactly as given.
@@ -60,7 +61,7 @@ func (s *Service) Execute(ctx context.Context, name string, a Arguments) (string
 		q := domain.MessageQuery{Chat: a.GroupURL, Limit: limit(50, 200)}
 		switch name {
 		case "read_messages":
-			q.BeforeID = a.BeforeID
+			q.BeforeID, q.Unread = a.BeforeID, a.UnreadOnly
 		case "search_messages":
 			q.Search, q.BeforeID, q.Limit = a.Query, a.BeforeID, limit(30, 100)
 		case "global_search":
@@ -93,7 +94,7 @@ func (s *Service) Execute(ctx context.Context, name string, a Arguments) (string
 		body := strings.Join(lines, "\n")
 		// Chat-scoped results are ascending, so msgs[0] is the oldest: the next backward cursor.
 		cursor := ""
-		if len(msgs) > 0 && (name == "read_messages" || name == "search_messages") {
+		if len(msgs) > 0 && ((name == "read_messages" && !q.Unread) || name == "search_messages") {
 			cursor = fmt.Sprintf(" (nextBeforeId=%d)", msgs[0].ID)
 		}
 		switch name {
@@ -104,6 +105,12 @@ func (s *Service) Execute(ctx context.Context, name string, a Arguments) (string
 		case "get_pinned":
 			return cmp.Or(body, "(no pinned messages)"), nil
 		default:
+			if q.Unread {
+				if len(msgs) == 0 {
+					return "(no unread messages)", nil
+				}
+				return fmt.Sprintf("Unread messages (maxId=%d):\n%s", maxID, body), nil
+			}
 			if len(msgs) == 0 && a.BeforeID > 0 {
 				return "(no older messages)", nil
 			}
@@ -239,6 +246,9 @@ func validate(name string, a *Arguments) error {
 	// 0 means beforeId was omitted: read from the latest message.
 	if a.BeforeID < 0 || a.BeforeID > math.MaxInt32 {
 		return fmt.Errorf("beforeId must be between 1 and 2147483647")
+	}
+	if name == "read_messages" && a.UnreadOnly && a.BeforeID > 0 {
+		return fmt.Errorf("beforeId cannot be combined with unreadOnly")
 	}
 	if name == "list_folder_dialogs" && (a.FolderID < 2 || a.FolderID > math.MaxInt32) {
 		return fmt.Errorf("folderId must be between 2 and 2147483647")

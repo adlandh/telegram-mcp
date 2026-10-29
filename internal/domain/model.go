@@ -29,6 +29,8 @@ type MessageQuery struct {
 	Chat, Search             string
 	Limit, SinceID, BeforeID int
 	Since, Pinned, Global    bool
+	// Unread selects messages after the chat's read cursor, oldest first.
+	Unread bool
 }
 
 type Chat struct {

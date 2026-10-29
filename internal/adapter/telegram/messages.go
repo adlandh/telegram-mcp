@@ -22,6 +22,17 @@ func (c *Client) Messages(ctx context.Context, q domain.MessageQuery) ([]domain.
 		}
 		input = r.input
 	}
+	// Unread messages are the forward read from the chat's incoming read cursor.
+	if q.Unread {
+		d, err := c.dialog(ctx, input)
+		if err != nil {
+			return nil, err
+		}
+		if d == nil {
+			return nil, fmt.Errorf("read state unavailable: the account has no dialog with this chat")
+		}
+		q.Since, q.SinceID = true, d.ReadInboxMaxID
+	}
 	result := make([]domain.Message, 0, q.Limit)
 	offset := q.BeforeID
 	if q.Since {

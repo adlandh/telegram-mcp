@@ -16,14 +16,12 @@ func (c *Client) MarkRead(ctx context.Context, chat string, messageID int) (stri
 	unreadMark := false
 	if messageID == 0 {
 		// Official clients read up to the latest message instead of relying on max_id=0.
-		dialogs, err := c.api.MessagesGetPeerDialogs(ctx, []tg.InputDialogPeerClass{&tg.InputDialogPeer{Peer: r.input}})
+		d, err := c.dialog(ctx, r.input)
 		if err != nil {
-			return "", 0, fmt.Errorf("get dialog: %w", err)
+			return "", 0, err
 		}
-		for _, item := range dialogs.Dialogs {
-			if d, ok := item.(*tg.Dialog); ok {
-				messageID, unreadMark = d.TopMessage, d.UnreadMark
-			}
+		if d != nil {
+			messageID, unreadMark = d.TopMessage, d.UnreadMark
 		}
 	}
 	// An empty chat has no history to acknowledge, but may still carry a manual unread mark.
@@ -46,4 +44,18 @@ func (c *Client) MarkRead(ctx context.Context, chat string, messageID int) (stri
 		}
 	}
 	return r.info.ID, messageID, nil
+}
+
+// dialog returns the account's dialog with the peer, or nil when there is none.
+func (c *Client) dialog(ctx context.Context, input tg.InputPeerClass) (*tg.Dialog, error) {
+	dialogs, err := c.api.MessagesGetPeerDialogs(ctx, []tg.InputDialogPeerClass{&tg.InputDialogPeer{Peer: input}})
+	if err != nil {
+		return nil, fmt.Errorf("get dialog: %w", err)
+	}
+	for _, item := range dialogs.Dialogs {
+		if d, ok := item.(*tg.Dialog); ok {
+			return d, nil
+		}
+	}
+	return nil, nil
 }

@@ -320,3 +320,65 @@ Each dialog line from `list_dialogs` and `list_folder_dialogs` SHALL indicate wh
 
 - **WHEN** a chat has 0 unread messages and is manually marked unread
 - **THEN** its dialog line shows 0 unread and the manual unread mark
+
+### Requirement: Read only unread messages of a chat
+
+`read_messages` SHALL accept optional boolean `unreadOnly`. When true, it SHALL return up to its effective limit of the earliest messages with IDs strictly greater than the chat's incoming read cursor, in ascending ID order, with `maxId` equal to the largest returned ID. Default and maximum limits SHALL stay 50 and 200. Omitted or false SHALL keep current `read_messages` results.
+
+#### Scenario: Only messages after the read cursor are returned
+
+- **WHEN** a chat has messages 1 through 15, its read cursor is 12, and a caller invokes `read_messages` with `unreadOnly=true`
+- **THEN** the response contains messages 13, 14 and 15 in ascending order and reports `maxId=15`
+
+#### Scenario: Large unread backlog starts with the oldest unread
+
+- **WHEN** a chat has 300 unread messages and a caller invokes `read_messages` with `unreadOnly=true` and `limit=50`
+- **THEN** the response contains the 50 oldest unread messages and its `maxId` is the largest of them
+
+#### Scenario: Default behavior is unchanged
+
+- **WHEN** a caller omits `unreadOnly`
+- **THEN** `read_messages` selects the newest messages exactly as before
+
+### Requirement: Continue an unread read without gaps
+
+The `maxId` of an unread response SHALL be usable as `fetch_since` `sinceId` to receive the following messages without gaps or overlap. Because reading never moves the read cursor, repeating `read_messages` with `unreadOnly=true` SHALL return the same selection until the caller acknowledges messages with `mark_read`.
+
+#### Scenario: Continue with fetch_since
+
+- **WHEN** an unread response reports `maxId=62` and a caller invokes `fetch_since` with `sinceId=62`
+- **THEN** the result starts with the first available message after 62
+
+#### Scenario: Acknowledge and read the next batch
+
+- **WHEN** a caller invokes `mark_read` with `messageId` equal to the previous unread `maxId` and calls `read_messages` with `unreadOnly=true` again
+- **THEN** the new response starts after that `maxId`
+
+#### Scenario: Reading unread messages is side-effect free
+
+- **WHEN** a caller invokes `read_messages` with `unreadOnly=true`
+- **THEN** the chat's read cursor, unread count and manual unread mark are unchanged
+
+### Requirement: Unread selection edge cases
+
+An unread selection with no messages after the read cursor SHALL return explanatory text without `maxId`, including chats that only carry a manual unread mark. `unreadOnly=true` combined with `beforeId` SHALL be rejected without contacting Telegram. A chat whose read state is unavailable to the account SHALL return a tool error rather than unfiltered history.
+
+#### Scenario: Nothing unread
+
+- **WHEN** a chat's read cursor equals its latest message ID and a caller invokes `read_messages` with `unreadOnly=true`
+- **THEN** the tool returns explanatory text stating there are no unread messages and reports no error
+
+#### Scenario: Manual unread mark without unread messages
+
+- **WHEN** a chat has 0 unread messages, is manually marked unread, and a caller invokes `read_messages` with `unreadOnly=true`
+- **THEN** the tool returns the no-unread explanatory text
+
+#### Scenario: beforeId conflicts with unreadOnly
+
+- **WHEN** a caller invokes `read_messages` with `unreadOnly=true` and `beforeId=500`
+- **THEN** the call fails without contacting Telegram
+
+#### Scenario: Read state unavailable
+
+- **WHEN** a caller requests unread messages of a public channel the account has no dialog with
+- **THEN** the tool returns an error and no messages

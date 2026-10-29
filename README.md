@@ -216,7 +216,7 @@ Defaults and maximums are listed below. Numeric parameters are integers; chat ID
 
 | Tool | Required parameters | Optional parameters |
 | --- | --- | --- |
-| `read_messages` | `groupUrl` | `limit`: 50, maximum 200; `beforeId`: only older messages; `maxTextChars` |
+| `read_messages` | `groupUrl` | `limit`: 50, maximum 200; `beforeId`: only older messages; `unreadOnly`: false; `maxTextChars` |
 | `search_messages` | `groupUrl`, `query` | `limit`: 30, maximum 100; `beforeId`: only older matches; `maxTextChars` |
 | `fetch_since` | `groupUrl`, `sinceId` | `limit`: 100, maximum 200; `maxTextChars` |
 | `get_message` | `groupUrl`, `messageId` | — |
@@ -249,6 +249,8 @@ Numeric parameters must be integers. `archived=true` selects only the archive; `
 `read_messages`, `search_messages`, and `get_pinned` sort selected messages by ascending ID. `[album:...]` preserves the full 64-bit ID as a string; `[reply:...]` connects replies. `get_message` adds views, forwards, reactions, and reply count.
 
 `fetch_since` returns the earliest messages after `sinceId`; use its `maxId` as the next `sinceId` until results are empty. Reaching `limit` never skips backlog.
+
+`read_messages` with `unreadOnly=true` returns the oldest messages after the chat's read cursor, with `maxId`. Continue with `fetch_since` using that `maxId` as `sinceId`, or call `mark_read` with `messageId=maxId` and repeat. Reading never marks messages read, and `unreadOnly` cannot be combined with `beforeId`. Forum topics use the chat-wide read cursor.
 
 To walk older history, call `read_messages` or `search_messages` without `beforeId`, then pass each returned `nextBeforeId` (the smallest ID in the page) as `beforeId`. Repeat until the response is empty; that response has no cursor. `beforeId` is exclusive, so pages never overlap or skip messages.
 
@@ -296,7 +298,7 @@ go test -race ./...
 golangci-lint run ./...
 ```
 
-Offline tests need no credentials or network. MCP tests cover handshake, tools, calls, validation, errors, and inline `view_thumbnail` images; fake MTProto tests cover `fetch_since` and `beforeId` history and search walks across ID gaps, archives, and message/chat ownership, plus `unreadOnly` scans past read pages, `get_me` without the phone, and `save_draft` issuing only the draft RPC. Other tests cover `maxTextChars` truncation, media metadata, limits, truncated-download rejection, cleanup, atomic session writes, and HTTP shutdown draining. Real login, API access, and account downloads require manual checks after `setup`.
+Offline tests need no credentials or network. MCP tests cover handshake, tools, calls, validation, errors, and inline `view_thumbnail` images; fake MTProto tests cover `fetch_since` and `beforeId` history and search walks across ID gaps, archives, and message/chat ownership, plus `unreadOnly` scans past read pages and unread reads from the read cursor, `get_me` without the phone, and `save_draft` issuing only the draft RPC. Other tests cover `maxTextChars` truncation, media metadata, limits, truncated-download rejection, cleanup, atomic session writes, and HTTP shutdown draining. Real login, API access, and account downloads require manual checks after `setup`.
 
 CI (`.github/workflows/ci.yml`) runs `go test -race ./...`, golangci-lint v2.15.0, and `go build .` on pull requests and pushes to `main`. `govulncheck.yml` scans with the current stable Go on the same triggers and weekly. Dependabot updates Go modules and GitHub Actions weekly.
 
