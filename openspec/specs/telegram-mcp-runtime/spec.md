@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Provide MCP clients with a locally configured, read-only Telegram user-account service using stdio and reusable authentication.
+Provide MCP clients with a locally configured Telegram user-account service using stdio and reusable authentication, read-only except for the explicit `mark_read` and `save_draft` account writes.
 
 ## Requirements
 
