@@ -13,12 +13,15 @@ func (c *Client) SaveDraft(ctx context.Context, chat, text string) (string, erro
 	if err != nil {
 		return "", err
 	}
+
 	ok, err := c.api.MessagesSaveDraft(ctx, &tg.MessagesSaveDraftRequest{Peer: r.input, Message: text})
 	if err != nil {
 		return "", fmt.Errorf("save draft: %w", err)
 	}
+
 	if !ok {
 		return "", fmt.Errorf("telegram did not save the draft")
 	}
+
 	return r.info.ID, nil
 }

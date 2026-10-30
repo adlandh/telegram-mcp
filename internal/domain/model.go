@@ -10,12 +10,19 @@ import (
 const MaxDownloadMB = math.MaxInt64 / (1 << 20)
 
 type Message struct {
-	ID                                  int
-	Date                                time.Time
-	Sender, Text, Chat, ChatID, AlbumID string
-	ReplyTo, Reactions                  int
-	Views, Forwards, Replies            *int
-	Media                               Media
+	Date      time.Time
+	Views     *int
+	Replies   *int
+	Forwards  *int
+	Text      string
+	ChatID    string
+	AlbumID   string
+	Chat      string
+	Sender    string
+	Media     Media
+	ReplyTo   int
+	Reactions int
+	ID        int
 }
 
 type Media struct {
@@ -34,10 +41,13 @@ type MessageQuery struct {
 }
 
 type Chat struct {
-	ID, Title, Username, Type, About string
-	Members                          *int
-	Unread                           int
-	// UnreadMark is Telegram's manual "marked as unread" flag.
+	Members    *int
+	ID         string
+	Title      string
+	Username   string
+	Type       string
+	About      string
+	Unread     int
 	UnreadMark bool
 }
 
@@ -45,8 +55,8 @@ type Chat struct {
 func (c Chat) HasUnread() bool { return c.Unread > 0 || c.UnreadMark }
 
 type Folder struct {
-	ID    int
 	Title string
+	ID    int
 	Count int
 }
 
@@ -56,6 +66,6 @@ type Download struct {
 }
 
 type Image struct {
-	Data []byte
 	MIME string
+	Data []byte
 }
