@@ -12,3 +12,4 @@
 /openspec/changes/
 /.agents/
 /.opencode/
+/.golangci.yml

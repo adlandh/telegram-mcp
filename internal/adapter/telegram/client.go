@@ -49,35 +49,66 @@ func (c *Client) remember(r resolved, keys ...string) {
 
 func normalize(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
+
 	lower := strings.ToLower(raw)
 	for _, prefix := range []string{"t.me/", "www.t.me/", "telegram.me/", "www.telegram.me/"} {
 		if strings.HasPrefix(lower, prefix) {
 			raw = "https://" + raw
 		}
 	}
+
 	if strings.Contains(raw, "://") {
-		u, err := url.Parse(raw)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || !slices.Contains([]string{"t.me", "telegram.me"}, strings.TrimPrefix(strings.ToLower(u.Host), "www.")) {
-			return "", fmt.Errorf("expected a t.me URL, username, or numeric ID")
+		var err error
+		if raw, err = urlName(raw); err != nil {
+			return "", err
 		}
-		parts := strings.Split(strings.Trim(u.Path, "/"), "/")
-		if len(parts) >= 2 && parts[0] == "c" {
-			id, err := strconv.ParseInt(parts[1], 10, 64)
-			if err != nil || id <= 0 || id >= 1000000000000 {
-				return "", fmt.Errorf("invalid private channel ID")
-			}
-			return strconv.FormatInt(-1000000000000-id, 10), nil
-		}
-		if parts[0] == "s" && len(parts) >= 2 {
-			parts = parts[1:]
-		}
-		raw = parts[0]
 	}
+
 	raw = strings.TrimPrefix(raw, "@")
 	if raw == "" || strings.ContainsAny(raw, "/+ ?#") || raw == "joinchat" {
 		return "", fmt.Errorf("use a chat username or ID; invite links do not join chats")
 	}
+
 	return raw, nil
+}
+
+// urlName returns the username, or the marked ID of a t.me/c/ link, that a t.me URL names.
+func urlName(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || !slices.Contains([]string{"t.me", "telegram.me"}, strings.TrimPrefix(strings.ToLower(u.Host), "www.")) {
+		return "", fmt.Errorf("expected a t.me URL, username, or numeric ID")
+	}
+
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) >= 2 && parts[0] == "c" {
+		return privateChannelID(parts[1])
+	}
+
+	if parts[0] == "s" && len(parts) >= 2 {
+		parts = parts[1:]
+	}
+
+	return parts[0], nil
+}
+
+func privateChannelID(raw string) (string, error) {
+	id, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || id <= 0 || id >= 1000000000000 {
+		return "", fmt.Errorf("invalid private channel ID")
+	}
+
+	return strconv.FormatInt(-1000000000000-id, 10), nil
+}
+
+func (c *Client) cached(key string) (resolved, bool) {
+	v, ok := c.peers.Load(key)
+	if !ok {
+		return resolved{}, false
+	}
+
+	r, ok := v.(resolved)
+
+	return r, ok
 }
 
 func (c *Client) resolve(ctx context.Context, raw string) (resolved, error) {
@@ -85,60 +116,83 @@ func (c *Client) resolve(ctx context.Context, raw string) (resolved, error) {
 	if err != nil {
 		return resolved{}, err
 	}
-	if id, err := strconv.ParseInt(name, 10, 64); err == nil {
-		// Numeric peers need an access hash, including after restart.
-		if r, ok := c.peers.Load(name); ok {
-			return r.(resolved), nil
-		}
-		var fallback *resolved
-		for _, folder := range []int{0, 1} {
-			iter := query.GetDialogs(c.api).FolderID(folder).BatchSize(100).Iter()
-			for iter.Next(ctx) {
-				e := iter.Value()
-				d, ok := e.Dialog.(*tg.Dialog)
-				if !ok {
-					continue
-				}
-				r := describe(d.Peer, e.Entities)
-				r.input = e.Peer
-				c.remember(r)
-				if r.info.ID == name {
-					return r, nil
-				}
-				if id > 0 && r.info.Type == "Channel" && r.info.ID == strconv.FormatInt(-1000000000000-id, 10) {
-					fallback = &r
-				}
-			}
-			if err := iter.Err(); err != nil {
-				return resolved{}, fmt.Errorf("resolve dialogs: %w", err)
-			}
-		}
-		if fallback != nil {
-			c.remember(*fallback, name)
-			return *fallback, nil
-		}
-		return resolved{}, fmt.Errorf("chat ID not found in account dialogs; use list_dialogs or a username")
-	}
 	// Telegram usernames are case-insensitive and never purely numeric.
 	key := strings.ToLower(name)
-	if r, ok := c.peers.Load(key); ok {
-		return r.(resolved), nil
+	if r, ok := c.cached(key); ok {
+		return r, nil
 	}
+
+	if id, parseErr := strconv.ParseInt(name, 10, 64); parseErr == nil {
+		return c.resolveID(ctx, name, id)
+	}
+
 	r, err := c.api.ContactsResolveUsername(ctx, &tg.ContactsResolveUsernameRequest{Username: name})
 	if err != nil {
 		return resolved{}, fmt.Errorf("resolve username: %w", err)
 	}
+
 	entities := peer.EntitiesFromResult(r)
+
 	info := describe(r.Peer, entities)
 	if info.input, err = entities.ExtractPeer(r.Peer); err != nil {
-		return info, err
+		return info, fmt.Errorf("resolve username peer: %w", err)
 	}
+
 	c.remember(info, key)
+
 	return info, nil
+}
+
+// resolveID finds a marked or bare channel ID in the account's dialogs, since
+// numeric peers need an access hash, including after restart.
+func (c *Client) resolveID(ctx context.Context, name string, id int64) (resolved, error) {
+	// A bare positive ID may be a channel's raw ID; a chat or user never has this marked form.
+	channelID := ""
+	if id > 0 {
+		channelID = strconv.FormatInt(-1000000000000-id, 10)
+	}
+
+	var fallback *resolved
+
+	for _, folder := range []int{0, 1} {
+		iter := query.GetDialogs(c.api).FolderID(folder).BatchSize(100).Iter()
+		for iter.Next(ctx) {
+			e := iter.Value()
+
+			d, ok := e.Dialog.(*tg.Dialog)
+			if !ok {
+				continue
+			}
+
+			r := describe(d.Peer, e.Entities)
+			r.input = e.Peer
+			c.remember(r)
+
+			if r.info.ID == name {
+				return r, nil
+			}
+
+			if channelID != "" && r.info.ID == channelID {
+				fallback = &r
+			}
+		}
+
+		if err := iter.Err(); err != nil {
+			return resolved{}, fmt.Errorf("resolve dialogs: %w", err)
+		}
+	}
+
+	if fallback != nil {
+		c.remember(*fallback, name)
+		return *fallback, nil
+	}
+
+	return resolved{}, fmt.Errorf("chat ID not found in account dialogs; use list_dialogs or a username")
 }
 
 func describe(p tg.PeerClass, entities peer.Entities) resolved {
 	r := resolved{}
+
 	switch p := p.(type) {
 	case *tg.PeerUser:
 		r.info.ID, r.info.Type = strconv.FormatInt(p.UserID, 10), "User"
@@ -159,9 +213,11 @@ func describe(p tg.PeerClass, entities peer.Entities) resolved {
 			}
 		}
 	}
+
 	if r.info.Username != "" {
 		r.info.Username = "@" + r.info.Username
 	}
+
 	return r
 }
 
@@ -170,37 +226,51 @@ func (c *Client) Dialogs(ctx context.Context, limit int, archived, unreadOnly bo
 	if archived {
 		folder = 1
 	}
+
 	batch := min(limit, 100)
 	if unreadOnly {
 		// Read chats are skipped, so small pages would only add round trips.
 		batch = 100
 	}
+
 	iter := query.GetDialogs(c.api).FolderID(folder).BatchSize(batch).Iter()
+
 	chats := make([]domain.Chat, 0, limit)
 	for len(chats) < limit && iter.Next(ctx) {
 		e := iter.Value()
+
 		d, ok := e.Dialog.(*tg.Dialog)
 		if !ok {
 			continue
 		}
+
 		r := describe(d.Peer, e.Entities)
 		r.input = e.Peer
 		c.remember(r)
+
 		r.info.Unread, r.info.UnreadMark = d.UnreadCount, d.UnreadMark
 		if unreadOnly && !r.info.HasUnread() {
 			continue
 		}
+
 		chats = append(chats, r.info)
 	}
-	return chats, iter.Err()
+
+	if err := iter.Err(); err != nil {
+		return nil, fmt.Errorf("list dialogs: %w", err)
+	}
+
+	return chats, nil
 }
 
 func (c *Client) Folders(ctx context.Context) ([]domain.Folder, error) {
 	r, err := c.api.MessagesGetDialogFilters(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("get folders: %w", err)
 	}
+
 	var result []domain.Folder
+
 	for _, f := range r.Filters {
 		switch f := f.(type) {
 		case *tg.DialogFilter:
@@ -209,6 +279,7 @@ func (c *Client) Folders(ctx context.Context) ([]domain.Folder, error) {
 			result = append(result, domain.Folder{ID: f.ID, Title: f.Title.Text, Count: explicitCount(f.PinnedPeers, f.IncludePeers)})
 		}
 	}
+
 	return result, nil
 }
 
@@ -218,6 +289,7 @@ func explicitCount(pinned, included []tg.InputPeerClass) int {
 	for _, p := range slices.Concat(pinned, included) {
 		seen[folderInputKey(p)] = true
 	}
+
 	return len(seen)
 }
 
@@ -227,11 +299,13 @@ func (c *Client) Self(ctx context.Context) (domain.Chat, error) {
 	if err != nil {
 		return domain.Chat{}, fmt.Errorf("get account: %w", err)
 	}
+
 	for _, u := range users {
 		if u, ok := u.(*tg.User); ok {
 			return describe(&tg.PeerUser{UserID: u.ID}, peer.NewEntities(map[int64]*tg.User{u.ID: u}, nil, nil)).info, nil
 		}
 	}
+
 	return domain.Chat{}, fmt.Errorf("telegram returned no account")
 }
 
@@ -240,9 +314,13 @@ func (c *Client) Chat(ctx context.Context, name string) (domain.Chat, error) {
 	if err != nil {
 		return domain.Chat{}, err
 	}
-	var full *tg.MessagesChatFull
-	var current peer.Entities
-	var self tg.PeerClass
+
+	var (
+		full    *tg.MessagesChatFull
+		current peer.Entities
+		self    tg.PeerClass
+	)
+
 	switch p := r.input.(type) {
 	case *tg.InputPeerChannel:
 		self = &tg.PeerChannel{ChannelID: p.ChannelID}
@@ -253,14 +331,17 @@ func (c *Client) Chat(ctx context.Context, name string) (domain.Chat, error) {
 	case *tg.InputPeerUser:
 		u, userErr := c.api.UsersGetFullUser(ctx, &tg.InputUser{UserID: p.UserID, AccessHash: p.AccessHash})
 		if userErr != nil {
-			return domain.Chat{}, userErr
+			return domain.Chat{}, fmt.Errorf("get user: %w", userErr)
 		}
+
 		self, current = &tg.PeerUser{UserID: p.UserID}, peer.EntitiesFromResult(u)
 		r.info.About = u.FullUser.About
 	}
+
 	if err != nil {
-		return domain.Chat{}, err
+		return domain.Chat{}, fmt.Errorf("get full chat: %w", err)
 	}
+
 	if full != nil {
 		current = peer.EntitiesFromResult(full)
 	}
@@ -271,19 +352,28 @@ func (c *Client) Chat(ctx context.Context, name string) (domain.Chat, error) {
 			r.info.Members = fresh.info.Members
 		}
 	}
-	if full != nil {
-		switch f := full.FullChat.(type) {
-		case *tg.ChannelFull:
-			r.info.About = f.About
-			if n, ok := f.GetParticipantsCount(); ok {
-				r.info.Members = new(n)
-			}
-		case *tg.ChatFull:
-			r.info.About = f.About
-			if p, ok := f.Participants.(*tg.ChatParticipants); ok {
-				r.info.Members = new(len(p.Participants))
-			}
+
+	applyFull(&r.info, full)
+
+	return r.info, nil
+}
+
+// applyFull copies the about text and member count from a group or channel's full info.
+func applyFull(info *domain.Chat, full *tg.MessagesChatFull) {
+	if full == nil {
+		return
+	}
+
+	switch f := full.FullChat.(type) {
+	case *tg.ChannelFull:
+		info.About = f.About
+		if n, ok := f.GetParticipantsCount(); ok {
+			info.Members = new(n)
+		}
+	case *tg.ChatFull:
+		info.About = f.About
+		if p, ok := f.Participants.(*tg.ChatParticipants); ok {
+			info.Members = new(len(p.Participants))
 		}
 	}
-	return r.info, nil
 }

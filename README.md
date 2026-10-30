@@ -300,7 +300,7 @@ golangci-lint run ./...
 
 Offline tests need no credentials or network. MCP tests cover handshake, tools, calls, validation, errors, and inline `view_thumbnail` images; fake MTProto tests cover `fetch_since` and `beforeId` history and search walks across ID gaps, archives, and message/chat ownership, plus `unreadOnly` scans past read pages and unread reads from the read cursor, `get_me` without the phone, and `save_draft` issuing only the draft RPC. Other tests cover `maxTextChars` truncation, media metadata, limits, truncated-download rejection, cleanup, atomic session writes, and HTTP shutdown draining. Real login, API access, and account downloads require manual checks after `setup`.
 
-CI (`.github/workflows/ci.yml`) runs `go test -race ./...`, golangci-lint v2.15.0, and `go build .` on pull requests and pushes to `main`. `govulncheck.yml` scans with the current stable Go on the same triggers and weekly. Dependabot updates Go modules and GitHub Actions weekly.
+CI (`.github/workflows/ci.yml`) runs `go test -race ./...`, golangci-lint v2.15.0, and `go build .` on pull requests and pushes to `main`. The lint config is not tracked: CI and `task lint` download `.golangci.yml` from [adlandh/golangci-lint-config](https://github.com/adlandh/golangci-lint-config) before linting; without Task, fetch it first with `curl -fsS https://raw.githubusercontent.com/adlandh/golangci-lint-config/refs/heads/main/.golangci.yml -o .golangci.yml`. `govulncheck.yml` scans with the current stable Go on the same triggers and weekly. Dependabot updates Go modules and GitHub Actions weekly.
 
 ## License
 

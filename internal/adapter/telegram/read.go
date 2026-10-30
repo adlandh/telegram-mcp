@@ -13,37 +13,55 @@ func (c *Client) MarkRead(ctx context.Context, chat string, messageID int) (stri
 	if err != nil {
 		return "", 0, err
 	}
+
 	unreadMark := false
+
 	if messageID == 0 {
 		// Official clients read up to the latest message instead of relying on max_id=0.
-		d, err := c.dialog(ctx, r.input)
+		var d *tg.Dialog
+
+		d, err = c.dialog(ctx, r.input)
 		if err != nil {
 			return "", 0, err
 		}
+
 		if d != nil {
 			messageID, unreadMark = d.TopMessage, d.UnreadMark
 		}
 	}
 	// An empty chat has no history to acknowledge, but may still carry a manual unread mark.
 	if messageID > 0 {
-		switch p := r.input.(type) {
-		case *tg.InputPeerChannel:
-			_, err = c.api.ChannelsReadHistory(ctx, &tg.ChannelsReadHistoryRequest{Channel: &tg.InputChannel{ChannelID: p.ChannelID, AccessHash: p.AccessHash}, MaxID: messageID})
-		case *tg.InputPeerUser, *tg.InputPeerChat, *tg.InputPeerSelf:
-			_, err = c.api.MessagesReadHistory(ctx, &tg.MessagesReadHistoryRequest{Peer: p, MaxID: messageID})
-		default:
-			return "", 0, fmt.Errorf("unsupported chat type %T", p)
-		}
-		if err != nil {
-			return "", 0, fmt.Errorf("read history: %w", err)
+		if err = c.readHistory(ctx, r.input, messageID); err != nil {
+			return "", 0, err
 		}
 	}
+
 	if unreadMark {
 		if _, err := c.api.MessagesMarkDialogUnread(ctx, &tg.MessagesMarkDialogUnreadRequest{Peer: &tg.InputDialogPeer{Peer: r.input}}); err != nil {
 			return "", 0, fmt.Errorf("clear unread mark: %w", err)
 		}
 	}
+
 	return r.info.ID, messageID, nil
+}
+
+func (c *Client) readHistory(ctx context.Context, input tg.InputPeerClass, messageID int) error {
+	var err error
+
+	switch p := input.(type) {
+	case *tg.InputPeerChannel:
+		_, err = c.api.ChannelsReadHistory(ctx, &tg.ChannelsReadHistoryRequest{Channel: &tg.InputChannel{ChannelID: p.ChannelID, AccessHash: p.AccessHash}, MaxID: messageID})
+	case *tg.InputPeerUser, *tg.InputPeerChat, *tg.InputPeerSelf:
+		_, err = c.api.MessagesReadHistory(ctx, &tg.MessagesReadHistoryRequest{Peer: p, MaxID: messageID})
+	default:
+		return fmt.Errorf("unsupported chat type %T", p)
+	}
+
+	if err != nil {
+		return fmt.Errorf("read history: %w", err)
+	}
+
+	return nil
 }
 
 // dialog returns the account's dialog with the peer, or nil when there is none.
@@ -52,10 +70,12 @@ func (c *Client) dialog(ctx context.Context, input tg.InputPeerClass) (*tg.Dialo
 	if err != nil {
 		return nil, fmt.Errorf("get dialog: %w", err)
 	}
+
 	for _, item := range dialogs.Dialogs {
 		if d, ok := item.(*tg.Dialog); ok {
 			return d, nil
 		}
 	}
+
 	return nil, nil
 }

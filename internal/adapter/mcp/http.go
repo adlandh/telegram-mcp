@@ -34,21 +34,27 @@ func HTTPHandler(ctx context.Context, server *mcp.Server, token string) (http.Ha
 				mu.Unlock()
 				return nil, errShuttingDown
 			}
+
 			calls.Add(1)
 			mu.Unlock()
+
 			defer calls.Done()
+
 			rctx, cancel := context.WithCancel(rctx)
 			defer cancel()
 			defer context.AfterFunc(ctx, cancel)()
+
 			return next(rctx, method, req)
 		}
 	})
+
 	want := sha256.Sum256([]byte(token))
 	verify := func(_ context.Context, got string, _ *http.Request) (*auth.TokenInfo, error) {
 		// Hash both sides so the comparison is constant-time regardless of length.
 		if sum := sha256.Sum256([]byte(got)); subtle.ConstantTimeCompare(sum[:], want[:]) != 1 {
 			return nil, auth.ErrInvalidToken
 		}
+
 		return &auth.TokenInfo{}, nil
 	}
 	streamable := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server },
@@ -56,6 +62,7 @@ func HTTPHandler(ctx context.Context, server *mcp.Server, token string) (http.Ha
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", http.NewCrossOriginProtection().Handler(
 		auth.RequireBearerToken(verify, &auth.RequireBearerTokenOptions{AllowMissingExpiration: true})(streamable)))
+
 	return mux, func() {
 		mu.Lock()
 		closed = true

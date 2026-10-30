@@ -20,6 +20,7 @@ type Executor interface {
 
 func New(service Executor) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "telegram-user", Version: "1.0.0"}, nil)
+
 	for _, def := range []struct {
 		name, description  string
 		required, optional []string
@@ -45,49 +46,62 @@ func New(service Executor) *mcp.Server {
 	} {
 		properties := map[string]any{}
 		for _, key := range slices.Concat(def.required, def.optional) {
-			p := map[string]any{"type": "integer", "minimum": 1}
-			switch key {
-			case "groupUrl":
-				p = map[string]any{"type": "string", "minLength": 1, "description": "https://t.me/name, @username, or marked numeric ID from list_dialogs"}
-			case "query":
-				p = map[string]any{"type": "string", "minLength": 1}
-			case "text":
-				p = map[string]any{"type": "string", "minLength": 1, "maxLength": 4096}
-			case "archived", "unreadOnly":
-				p = map[string]any{"type": "boolean"}
-			case "sinceId", "maxMB":
-				p["minimum"] = 0
-			case "folderId":
-				p["minimum"] = 2
-				p["maximum"] = math.MaxInt32
-			case "beforeId":
-				p["maximum"] = math.MaxInt32
-			}
-			properties[key] = p
+			properties[key] = property(key)
 		}
+
 		schema := map[string]any{"type": "object", "properties": properties, "additionalProperties": false}
 		if len(def.required) > 0 {
 			schema["required"] = def.required
 		}
+
 		mcp.AddTool(server, &mcp.Tool{Name: def.name, Description: def.description, InputSchema: schema,
 			Annotations: &mcp.ToolAnnotations{ReadOnlyHint: def.readOnly, IdempotentHint: def.name == "mark_read" || def.name == "save_draft", DestructiveHint: new(def.name == "save_draft"), OpenWorldHint: new(true)}},
 			func(ctx context.Context, _ *mcp.CallToolRequest, args app.Arguments) (*mcp.CallToolResult, any, error) {
 				if def.name == "view_thumbnail" {
 					img, err := service.ViewThumbnail(ctx, args)
 					if err != nil {
-						return nil, nil, err
+						return nil, nil, fmt.Errorf("%s: %w", def.name, err)
 					}
+
 					return &mcp.CallToolResult{Content: []mcp.Content{
 						&mcp.ImageContent{Data: img.Data, MIMEType: img.MIME},
 						&mcp.TextContent{Text: fmt.Sprintf("Preview: %s, %.1f KB", img.MIME, float64(len(img.Data))/1024)},
 					}}, nil, nil
 				}
+
 				text, err := service.Execute(ctx, def.name, args)
 				if err != nil {
-					return nil, nil, err
+					return nil, nil, fmt.Errorf("%s: %w", def.name, err)
 				}
+
 				return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}, nil, nil
 			})
 	}
+
 	return server
+}
+
+// property returns the JSON schema of a tool argument.
+func property(key string) map[string]any {
+	p := map[string]any{"type": "integer", "minimum": 1}
+
+	switch key {
+	case "groupUrl":
+		p = map[string]any{"type": "string", "minLength": 1, "description": "https://t.me/name, @username, or marked numeric ID from list_dialogs"}
+	case "query":
+		p = map[string]any{"type": "string", "minLength": 1}
+	case "text":
+		p = map[string]any{"type": "string", "minLength": 1, "maxLength": 4096}
+	case "archived", "unreadOnly":
+		p = map[string]any{"type": "boolean"}
+	case "sinceId", "maxMB":
+		p["minimum"] = 0
+	case "folderId":
+		p["minimum"] = 2
+		p["maximum"] = math.MaxInt32
+	case "beforeId":
+		p["maximum"] = math.MaxInt32
+	}
+
+	return p
 }

@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/gotd/td/bin"
@@ -20,12 +21,13 @@ func FloodWait() gotd.Middleware {
 		return func(ctx context.Context, in bin.Encoder, out bin.Decoder) error {
 			err := next.Invoke(ctx, in, out)
 			if d, ok := tgerr.AsFloodWait(err); !ok || d > maxFloodWait {
-				return err
+				return err //nolint:wrapcheck // the middleware stays transparent; callers wrap RPC errors
 			}
-			// ok is false only when ctx ended during the wait; err is then ctx.Err().
-			if ok, err := tgerr.FloodWait(ctx, err); !ok {
-				return err
+			// ok is false only when ctx ended during the wait; waitErr is then ctx.Err().
+			if ok, waitErr := tgerr.FloodWait(ctx, err); !ok {
+				return fmt.Errorf("flood wait: %w", waitErr)
 			}
+
 			return next.Invoke(ctx, in, out)
 		}
 	})
