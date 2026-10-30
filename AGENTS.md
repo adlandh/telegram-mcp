@@ -9,7 +9,7 @@ Run from the repository root with Go 1.26+ and golangci-lint v2:
 
 - `task build` — builds `bin/telegram-mcp` from the root package `.`.
 - `task test` — runs `go test -race ./...`; tests need no Telegram credentials or network.
-- `task lint` — runs `golangci-lint run ./...` with `.golangci.yml`.
+- `task lint` — downloads the shared `.golangci.yml` from `adlandh/golangci-lint-config` (untracked, gitignored), then runs `golangci-lint run ./...`.
 - `task fmt` — runs `gofmt -w *.go internal`.
 - Single package: `go test -race -count=1 ./internal/app`.
 - Single test: `go test -race -count=1 ./internal/adapter/telegram -run '^TestHistoryPaginationDoesNotLoseBacklog$'`.
