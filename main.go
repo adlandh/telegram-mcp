@@ -8,11 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"strings"
-	"sync"
-	"syscall"
 	"time"
 
 	mcpadapter "github.com/adlandh/telegram-mcp/internal/adapter/mcp"
@@ -20,22 +16,15 @@ import (
 	"github.com/adlandh/telegram-mcp/internal/app"
 	"github.com/adlandh/telegram-mcp/internal/config"
 	"github.com/adlandh/telegram-mcp/internal/port"
-	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/auth/qrlogin"
 	"github.com/gotd/td/tg"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.uber.org/fx"
-	"golang.org/x/term"
 )
 
 func main() {
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	err := run(ctx, os.Args[1:])
-
-	cancel()
-
-	if err != nil && !errors.Is(err, context.Canceled) {
+	if err := run(context.Background(), os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -86,14 +75,11 @@ func parseArgs(args []string) (mode, error) {
 	return m, nil
 }
 
-// instance is one run's wired dependencies.
-type instance struct {
-	client     *telegram.Client
-	dispatcher tg.UpdateDispatcher
-	server     *mcp.Server
-	cfg        config.Config
-	mode       mode
-}
+// job is the selected mode's work, run while the Telegram client is connected.
+type job func(context.Context) error
+
+// runner runs f while the Telegram client is connected; it is (*telegram.Client).Run in production.
+type runner func(ctx context.Context, f func(context.Context) error) error
 
 func run(ctx context.Context, args []string) error {
 	m, err := parseArgs(args)
@@ -106,52 +92,85 @@ func run(ctx context.Context, args []string) error {
 		return nil
 	}
 
-	in := &instance{mode: m}
-
-	opts := fx.Options(providers(!m.setup), fx.Populate(&in.cfg, &in.client, &in.dispatcher))
-	if !m.setup {
-		opts = fx.Options(opts, fx.Populate(&in.server))
+	var newJob any = serveJob
+	if m.setup {
+		newJob = loginJob
 	}
 
-	if err = fx.New(opts).Err(); err != nil {
+	return execute(ctx, providers(!m.setup), fx.Supply(m), fx.Invoke(prepare), fx.Provide(newJob),
+		fx.Provide(func(c *telegram.Client) runner { return c.Run }))
+}
+
+// execute starts the job in the background through the Fx lifecycle and stops it on a signal,
+// on ctx cancellation or when the job ends, returning the job's error.
+func execute(ctx context.Context, opts ...fx.Option) error {
+	var runErr error
+
+	app := fx.New(fx.NopLogger, fx.Options(opts...), fx.Invoke(func(lc fx.Lifecycle, sd fx.Shutdowner, r runner, j job) {
+		runCtx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+
+		lc.Append(fx.Hook{
+			OnStart: func(context.Context) error {
+				go func() {
+					defer close(done)
+
+					code := 0
+					if runErr = r(runCtx, j); runErr != nil {
+						code = 1
+					}
+
+					_ = sd.Shutdown(fx.ExitCode(code))
+				}()
+
+				return nil
+			},
+			OnStop: func(context.Context) error {
+				cancel()
+				<-done
+
+				return nil
+			},
+		})
+	}))
+	if err := app.Err(); err != nil {
 		return fmt.Errorf("initialize: %w", err)
 	}
 
-	if err = in.check(); err != nil {
-		return err
+	// OnStart only spawns the job, so ctx cancellation is handled by the select below, not by Start.
+	if err := app.Start(context.WithoutCancel(ctx)); err != nil {
+		return fmt.Errorf("start: %w", err)
 	}
 
-	if err = prepareSession(in.cfg.SessionPath, m.setup); err != nil {
-		return err
+	select {
+	case <-ctx.Done():
+	case <-app.Wait():
 	}
 
-	err = in.client.Run(ctx, func(ctx context.Context) error {
-		if m.setup {
-			return in.login(ctx)
-		}
+	if err := app.Stop(context.WithoutCancel(ctx)); err != nil {
+		return fmt.Errorf("stop: %w", err)
+	}
 
-		return in.serve(ctx)
-	})
-	if err != nil {
-		return fmt.Errorf("telegram client: %w", err)
+	if runErr != nil && !errors.Is(runErr, context.Canceled) {
+		return fmt.Errorf("telegram client: %w", runErr)
 	}
 
 	return nil
 }
 
-// check validates the settings the selected mode needs.
-func (in *instance) check() error {
-	if in.mode.setup && !in.mode.qr && in.cfg.Phone == "" {
+// prepare validates the settings the selected mode needs and prepares the session file.
+func prepare(cfg config.Config, m mode) error {
+	if m.setup && !m.qr && cfg.Phone == "" {
 		return fmt.Errorf("TELEGRAM_PHONE is required for setup")
 	}
 
-	if in.mode.http {
-		if err := in.cfg.CheckHTTP(); err != nil {
+	if m.http {
+		if err := cfg.CheckHTTP(); err != nil {
 			return fmt.Errorf("http settings: %w", err)
 		}
 	}
 
-	return nil
+	return prepareSession(cfg.SessionPath, m.setup)
 }
 
 // prepareSession creates the session directory for setup, or requires an existing session otherwise.
@@ -171,52 +190,56 @@ func prepareSession(path string, setup bool) error {
 	return nil
 }
 
-func (in *instance) login(ctx context.Context) error {
-	if in.mode.qr {
-		if err := setupQR(ctx, in.client.QR(), in.client.Auth(), qrlogin.OnLoginToken(in.dispatcher), os.Stderr, prompt); err != nil {
-			return fmt.Errorf("qr login: %w", err)
+func loginJob(m mode, cfg config.Config, client *telegram.Client, dispatcher tg.UpdateDispatcher) job {
+	return func(ctx context.Context) error {
+		if m.qr {
+			if err := setupQR(ctx, client.QR(), client.Auth(), qrlogin.OnLoginToken(dispatcher), os.Stderr, prompt); err != nil {
+				return fmt.Errorf("qr login: %w", err)
+			}
+		} else if err := setupLogin(ctx, client.Auth(), cfg.Phone, prompt, os.Stderr, time.Now); err != nil {
+			return fmt.Errorf("login: %w", err)
 		}
-	} else if err := setupLogin(ctx, in.client.Auth(), in.cfg.Phone, prompt, os.Stderr, time.Now); err != nil {
-		return fmt.Errorf("login: %w", err)
-	}
 
-	fmt.Fprintln(os.Stderr, "Session saved. Start telegram-mcp without arguments to serve MCP.")
-
-	return nil
-}
-
-func (in *instance) serve(ctx context.Context) error {
-	statusCtx, cancel := context.WithTimeout(ctx, in.cfg.RequestTimeout)
-	status, err := in.client.Auth().Status(statusCtx)
-
-	cancel()
-
-	if err != nil {
-		return fmt.Errorf("check session: %w", err)
-	}
-
-	if !status.Authorized {
-		return fmt.Errorf("session is not authorized; run telegram-mcp setup")
-	}
-
-	if !in.mode.http {
-		if err = in.server.Run(ctx, &mcp.StdioTransport{}); err != nil {
-			return fmt.Errorf("serve stdio: %w", err)
-		}
+		fmt.Fprintln(os.Stderr, "Session saved. Start telegram-mcp without arguments to serve MCP.")
 
 		return nil
 	}
+}
 
-	var lc net.ListenConfig
+func serveJob(m mode, cfg config.Config, client *telegram.Client, server *mcp.Server) job {
+	return func(ctx context.Context) error {
+		statusCtx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
+		status, err := client.Auth().Status(statusCtx)
 
-	ln, err := lc.Listen(ctx, "tcp", in.cfg.HTTPAddr)
-	if err != nil {
-		return fmt.Errorf("listen: %w", err)
+		cancel()
+
+		if err != nil {
+			return fmt.Errorf("check session: %w", err)
+		}
+
+		if !status.Authorized {
+			return fmt.Errorf("session is not authorized; run telegram-mcp setup")
+		}
+
+		if !m.http {
+			if err = server.Run(ctx, &mcp.StdioTransport{}); err != nil {
+				return fmt.Errorf("serve stdio: %w", err)
+			}
+
+			return nil
+		}
+
+		var lc net.ListenConfig
+
+		ln, err := lc.Listen(ctx, "tcp", cfg.HTTPAddr)
+		if err != nil {
+			return fmt.Errorf("listen: %w", err)
+		}
+
+		fmt.Fprintf(os.Stderr, "serving MCP on http://%s/mcp\n", ln.Addr())
+
+		return serveHTTP(ctx, ln, cfg.HTTPToken, server)
 	}
-
-	fmt.Fprintf(os.Stderr, "serving MCP on http://%s/mcp\n", ln.Addr())
-
-	return serveHTTP(ctx, ln, in.cfg.HTTPToken, in.server)
 }
 
 // serveHTTP serves until ctx ends or the listener fails. Either way it cancels in-flight tool calls
@@ -289,78 +312,11 @@ func providers(serving bool) fx.Option {
 // login requests, because Telegram may silently drop codes after repeated requests.
 func clientOptions(cfg config.Config, dispatcher tg.UpdateDispatcher, serving bool) telegram.Options {
 	opts := telegram.Options{
-		SessionStorage: &atomicSessionStorage{FileStorage: session.FileStorage{Path: cfg.SessionPath}}, UpdateHandler: dispatcher,
+		SessionStorage: tgadapter.NewSessionStorage(cfg.SessionPath), UpdateHandler: dispatcher,
 	}
 	if serving {
 		opts.Middlewares = []telegram.Middleware{tgadapter.FloodWait()}
 	}
 
 	return opts
-}
-
-// atomicSessionStorage replaces the session file via rename, so a crash or full disk
-// mid-write keeps the previous session instead of a truncated one.
-type atomicSessionStorage struct {
-	session.FileStorage
-	mu sync.Mutex
-}
-
-func (s *atomicSessionStorage) StoreSession(_ context.Context, data []byte) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	f, err := os.CreateTemp(filepath.Dir(s.Path), "."+filepath.Base(s.Path)+"-*") // created 0600
-	if err != nil {
-		return fmt.Errorf("create session file: %w", err)
-	}
-
-	defer func() { _ = os.Remove(f.Name()) }() // no-op after a successful rename
-
-	_, err = f.Write(data)
-	if err == nil {
-		err = f.Sync()
-	}
-
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-
-	if err != nil {
-		return fmt.Errorf("write session file: %w", err)
-	}
-
-	if err := os.Rename(f.Name(), s.Path); err != nil {
-		return fmt.Errorf("replace session file: %w", err)
-	}
-
-	return nil
-}
-
-var errInteractiveTerminal = errors.New("setup requires an interactive terminal")
-
-func prompt(ctx context.Context, label string, trim bool) (string, error) {
-	if err := ctx.Err(); err != nil {
-		return "", fmt.Errorf("setup interrupted: %w", err)
-	}
-
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return "", errInteractiveTerminal
-	}
-
-	fmt.Fprint(os.Stderr, label)
-
-	b, err := term.ReadPassword(int(os.Stdin.Fd()))
-
-	fmt.Fprintln(os.Stderr)
-
-	if err != nil {
-		return "", fmt.Errorf("read input: %w", err)
-	}
-
-	value := string(b)
-	if trim {
-		value = strings.TrimSpace(value)
-	}
-
-	return value, nil
 }
