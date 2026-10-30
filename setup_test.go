@@ -452,3 +452,21 @@ func TestSetupRetryKeepsResendDeadline(t *testing.T) {
 		t.Fatalf("calls = %v, out = %s", client.calls, &out)
 	}
 }
+
+func TestPrompt(t *testing.T) {
+	stdin, err := os.CreateTemp(t.TempDir(), "stdin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := os.Stdin
+	os.Stdin = stdin
+	t.Cleanup(func() { os.Stdin = previous; _ = stdin.Close() })
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := prompt(ctx, "Code: ", true); !errors.Is(err, context.Canceled) {
+		t.Fatalf("got %v, want cancellation", err)
+	}
+	if _, err := prompt(t.Context(), "Code: ", true); err == nil || !strings.Contains(err.Error(), "interactive terminal") {
+		t.Fatalf("got %v, want terminal error", err)
+	}
+}

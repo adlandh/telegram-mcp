@@ -16,7 +16,6 @@ import (
 	"github.com/adlandh/telegram-mcp/internal/app"
 	"github.com/adlandh/telegram-mcp/internal/config"
 	"github.com/adlandh/telegram-mcp/internal/domain"
-	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/tg"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -132,24 +131,6 @@ func TestProviders(t *testing.T) {
 	}
 }
 
-func TestPrompt(t *testing.T) {
-	stdin, err := os.CreateTemp(t.TempDir(), "stdin")
-	if err != nil {
-		t.Fatal(err)
-	}
-	previous := os.Stdin
-	os.Stdin = stdin
-	t.Cleanup(func() { os.Stdin = previous; _ = stdin.Close() })
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	if _, err := prompt(ctx, "Code: ", true); !errors.Is(err, context.Canceled) {
-		t.Fatalf("got %v, want cancellation", err)
-	}
-	if _, err := prompt(t.Context(), "Code: ", true); err == nil || !strings.Contains(err.Error(), "interactive terminal") {
-		t.Fatalf("got %v, want terminal error", err)
-	}
-}
-
 func testConfig(t *testing.T) string {
 	t.Helper()
 	sessionPath := filepath.Join(t.TempDir(), "session.json")
@@ -167,47 +148,6 @@ func testConfig(t *testing.T) string {
 		t.Setenv(key, value)
 	}
 	return sessionPath
-}
-
-func TestAtomicSessionStorage(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "session.json")
-	s := &atomicSessionStorage{FileStorage: session.FileStorage{Path: path}}
-	if err := s.StoreSession(t.Context(), []byte("old")); err != nil {
-		t.Fatal(err)
-	}
-	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0600 {
-		t.Fatalf("session file: %v, %v", info, err)
-	}
-	if err := os.Chmod(dir, 0500); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0700) })
-	if probe, err := os.CreateTemp(dir, ".probe-*"); err == nil {
-		// Privileged runs (e.g. root in containers) ignore directory modes, so the write cannot be made to fail.
-		_ = probe.Close()
-		_ = os.Remove(probe.Name())
-		t.Log("directory permissions not enforced; skipping write-failure case")
-	} else {
-		if err := s.StoreSession(t.Context(), []byte("new")); err == nil {
-			t.Fatal("store into read-only directory succeeded")
-		}
-		if data, err := s.LoadSession(t.Context()); err != nil || string(data) != "old" {
-			t.Fatalf("previous session lost: %q, %v", data, err)
-		}
-		if entries, _ := os.ReadDir(dir); len(entries) != 1 {
-			t.Fatalf("temporary files left: %v", entries)
-		}
-	}
-	if err := os.Chmod(dir, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.StoreSession(t.Context(), []byte("new")); err != nil {
-		t.Fatal(err)
-	}
-	if data, err := s.LoadSession(t.Context()); err != nil || string(data) != "new" {
-		t.Fatalf("session not replaced: %q, %v", data, err)
-	}
 }
 
 type executorFunc func(context.Context, string, app.Arguments) (string, error)
@@ -296,6 +236,34 @@ func TestServeHTTPDrainsCallsOnEveryExit(t *testing.T) {
 			}
 			if !cancelled.Load() || !cleaned.Load() {
 				t.Fatalf("cancelled=%v cleaned=%v: serveHTTP must cancel and drain in-flight calls", cancelled.Load(), cleaned.Load())
+			}
+		})
+	}
+}
+
+func TestExecuteLifecycle(t *testing.T) {
+	errJob := errors.New("job failed")
+	connected := runner(func(ctx context.Context, f func(context.Context) error) error { return f(ctx) })
+	for _, tt := range []struct {
+		name   string
+		cancel bool
+		job    job
+		want   error
+	}{
+		{"job error", false, func(context.Context) error { return errJob }, errJob},
+		{"job done", false, func(context.Context) error { return nil }, nil},
+		{"cancelled", true, nil, nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			j := tt.job
+			if tt.cancel { // cancel mid-run, as a signal would; the job must see its context end
+				j = func(jobCtx context.Context) error { cancel(); <-jobCtx.Done(); return jobCtx.Err() }
+			}
+			err := execute(ctx, fx.Supply(connected, j))
+			if tt.want == nil && err != nil || tt.want != nil && !errors.Is(err, tt.want) {
+				t.Fatalf("got %v, want %v", err, tt.want)
 			}
 		})
 	}

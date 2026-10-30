@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/gotd/td/telegram/auth"
@@ -12,6 +14,7 @@ import (
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
 	"github.com/skip2/go-qrcode"
+	"golang.org/x/term"
 )
 
 // setupClient keeps the interactive flow testable without a Telegram connection.
@@ -371,4 +374,33 @@ func loginError(stage string, err error) error {
 	}
 
 	return &setupError{message: stage + ": " + message, cause: err}
+}
+
+var errInteractiveTerminal = errors.New("setup requires an interactive terminal")
+
+func prompt(ctx context.Context, label string, trim bool) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("setup interrupted: %w", err)
+	}
+
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return "", errInteractiveTerminal
+	}
+
+	fmt.Fprint(os.Stderr, label)
+
+	b, err := term.ReadPassword(int(os.Stdin.Fd()))
+
+	fmt.Fprintln(os.Stderr)
+
+	if err != nil {
+		return "", fmt.Errorf("read input: %w", err)
+	}
+
+	value := string(b)
+	if trim {
+		value = strings.TrimSpace(value)
+	}
+
+	return value, nil
 }
