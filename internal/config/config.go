@@ -88,10 +88,17 @@ func (c *Config) loadLimits() error {
 	return nil
 }
 
+// exampleHTTPToken is the placeholder once published in .env.example; anyone can read it.
+const exampleHTTPToken = "replace_with_output_of_openssl_rand_hex_32"
+
 // CheckHTTP validates settings used only by the http command.
 func (c Config) CheckHTTP() error {
 	if len(c.HTTPToken) < 32 {
 		return fmt.Errorf("TELEGRAM_MCP_HTTP_TOKEN must contain at least 32 characters, for example from openssl rand -hex 32")
+	}
+
+	if c.HTTPToken == exampleHTTPToken {
+		return fmt.Errorf("TELEGRAM_MCP_HTTP_TOKEN is the public example value; generate a secret with openssl rand -hex 32")
 	}
 
 	host, _, err := net.SplitHostPort(c.HTTPAddr)
