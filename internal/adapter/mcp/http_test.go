@@ -2,6 +2,9 @@ package mcp
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -162,4 +165,64 @@ func TestHTTPHandlerRejectsCallsAfterWait(t *testing.T) {
 	if running.Load() != before {
 		t.Fatal("call after wait reached the executor")
 	}
+}
+
+func TestHTTPHandlerBoundsRequestBodies(t *testing.T) {
+	const token = "0123456789abcdef0123456789abcdef"
+	old := bodyTimeout
+	bodyTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { bodyTimeout = old })
+	handler, _ := HTTPHandler(t.Context(), New(executorFunc(func(context.Context, string, app.Arguments) (string, error) {
+		time.Sleep(3 * bodyTimeout) // outlives the body deadline
+		return "done", nil
+	})), token)
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	for name, auth := range map[string]string{"unauthenticated": "", "authenticated": "Authorization: Bearer " + token + "\r\n"} {
+		t.Run("stalled body "+name, func(t *testing.T) {
+			conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			_, _ = fmt.Fprintf(conn, "POST /mcp HTTP/1.1\r\nHost: %s\r\n%sContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{}", srv.Listener.Addr(), auth)
+			_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			start := time.Now()
+			// ReadAll returns only once the server closes the connection.
+			resp, err := io.ReadAll(conn)
+			if err != nil || time.Since(start) > 2*time.Second || !strings.Contains(string(resp), " 408 ") {
+				t.Fatalf("connection held %v: %q, %v", time.Since(start), resp, err)
+			}
+		})
+	}
+
+	t.Run("oversized body", func(t *testing.T) {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/mcp", strings.NewReader(strings.Repeat("x", maxBodyBytes+1)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusRequestEntityTooLarge {
+			t.Fatalf("status %d, want 413", resp.StatusCode)
+		}
+	})
+
+	t.Run("long call", func(t *testing.T) {
+		cs, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil).Connect(t.Context(),
+			&mcp.StreamableClientTransport{Endpoint: srv.URL + "/mcp", HTTPClient: &http.Client{Transport: bearer{token}}}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = cs.Close() })
+		r, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: "list_folders", Arguments: map[string]any{}})
+		if err != nil || r.IsError || r.Content[0].(*mcp.TextContent).Text != "done" {
+			t.Fatalf("long call: %+v, %v", r, err)
+		}
+	})
 }

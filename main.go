@@ -250,7 +250,9 @@ func serveHTTP(parent context.Context, ln net.Listener, token string, server *mc
 
 	handler, waitCalls := mcpadapter.HTTPHandler(ctx, server, token)
 	srv := &http.Server{
-		Handler: handler, ReadHeaderTimeout: 10 * time.Second,
+		// No ReadTimeout or WriteTimeout: they would cut off long tool calls and streams.
+		// HTTPHandler bounds request bodies itself.
+		Handler: handler, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute,
 		BaseContext: func(net.Listener) context.Context { return ctx },
 	}
 
