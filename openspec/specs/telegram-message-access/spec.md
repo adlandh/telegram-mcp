@@ -30,7 +30,7 @@ Chat-scoped tools SHALL accept usernames with or without `@`, `t.me` username li
 - **WHEN** a caller uses the same marked numeric ID in two consecutive tool calls
 - **THEN** the second call does not rescan the account's dialog lists
 
-#### Scenario: Repeated username lookup reuses access information
+#### Scenario: Repeated username lookup is resolved again
 
 - **WHEN** a caller names the same chat as `@Durov` and later as `t.me/durov`
 - **THEN** Telegram's username resolver is called for each of these calls
@@ -390,7 +390,7 @@ An unread selection with no messages after the read cursor SHALL return explanat
 
 ### Requirement: Hide Telegram service notification text
 
-Messages in the chat with Telegram's official service account (user ID `777000`), which delivers login codes, SHALL have their text replaced by a fixed placeholder in every message result: chat reads, search, global search, pinned messages, polling and `get_message`. Message ID, date, chat and media type SHALL still be reported.
+Messages in the chat with Telegram's official service account (user ID `777000`), which delivers login codes, SHALL have their text replaced by a fixed placeholder in every message result: chat reads, search, global search, pinned messages, polling and `get_message`. The placeholder counts as message text, so `maxTextChars` may truncate it. Message ID, date and media type SHALL still be reported, and global search SHALL still report the chat.
 
 #### Scenario: Login code is not returned by a chat read
 

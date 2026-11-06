@@ -37,7 +37,7 @@ The command `telegram-mcp http` SHALL serve MCP over the Streamable HTTP transpo
 
 ### Requirement: Bearer token authentication
 
-The `http` command SHALL require `TELEGRAM_MCP_HTTP_TOKEN`, at least 32 characters after trimming whitespace, and SHALL reject the placeholder value published in `.env.example`. Every HTTP request SHALL carry `Authorization: Bearer <token>`. The comparison SHALL run in constant time. Requests with a missing, malformed or wrong token SHALL receive `401 Unauthorized` before any MCP message is processed or Telegram is contacted. The token SHALL NOT appear in diagnostics.
+The `http` command SHALL require `TELEGRAM_MCP_HTTP_TOKEN`, at least 32 characters after trimming whitespace, and SHALL reject the placeholder value published in `.env.example`. Every HTTP request SHALL carry `Authorization: Bearer <token>`. The comparison SHALL run in constant time. Requests within the body limits of the bounded connection lifetime requirement that have a missing, malformed or wrong token SHALL receive `401 Unauthorized` before any MCP message is processed or Telegram is contacted; requests failing those limits receive `408` or `413` instead. The token SHALL NOT appear in diagnostics.
 
 #### Scenario: Missing token configuration fails startup
 
