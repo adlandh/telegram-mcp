@@ -8,12 +8,17 @@ Inspect Telegram message media and safely save full files or lightweight preview
 
 ### Requirement: Inspect media without downloading
 
-`get_media_info` SHALL describe available media type, MIME type, size, duration, filename, and downloadability without fetching the file payload. Supported downloadable categories SHALL include photos, documents, images, videos, audio, and voice messages. A message without media SHALL produce an explanatory result; unsupported media SHALL NOT be described as downloadable.
+`get_media_info` SHALL describe available media type, MIME type, size, duration, filename, and downloadability without fetching the file payload. Supported downloadable categories SHALL include photos, documents, images, videos, audio, and voice messages. A message without media SHALL produce an explanatory result; unsupported media and self-destructing media SHALL NOT be described as downloadable.
 
 #### Scenario: Video metadata does not download the video
 
 - **WHEN** a caller requests media information for a video message
 - **THEN** the response describes its metadata without downloading its payload
+
+#### Scenario: Self-destructing photo is not downloadable
+
+- **WHEN** a caller requests media information for a photo sent with a self-destruct timer
+- **THEN** the response describes it as not downloadable
 
 ### Requirement: Bounded full-media downloads
 
@@ -90,7 +95,7 @@ Inspect Telegram message media and safely save full files or lightweight preview
 
 ### Requirement: Respect protected content
 
-`download_media`, `get_thumbnail` and `view_thumbnail` SHALL reject media when the resolved chat or target message restricts saving with a no-forward flag. Missing messages, unavailable media, and unsupported payload types SHALL yield descriptive failures rather than successful empty files or empty images.
+`download_media`, `get_thumbnail` and `view_thumbnail` SHALL reject media when the resolved chat or target message restricts saving with a no-forward flag, when a private chat has content protection enabled by either participant, or when the media has a self-destruct timer. If a private chat's protection state cannot be read, the export SHALL fail. Missing messages, unavailable media, and unsupported payload types SHALL yield descriptive failures rather than successful empty files or empty images.
 
 #### Scenario: Protected channel media is not saved
 
@@ -101,6 +106,21 @@ Inspect Telegram message media and safely save full files or lightweight preview
 
 - **WHEN** media belongs to a protected channel or message
 - **THEN** `view_thumbnail` returns an error and no image content
+
+#### Scenario: Protected private chat media is not exported
+
+- **WHEN** either participant has enabled content protection for a private chat, and a message in it has media but no no-forward flag of its own
+- **THEN** `download_media`, `get_thumbnail` and `view_thumbnail` return an error and create no file or image
+
+#### Scenario: Unknown private chat protection fails closed
+
+- **WHEN** the server cannot read a private chat's protection state while exporting its media
+- **THEN** the export returns an error and creates no file or image
+
+#### Scenario: Self-destructing media is not exported
+
+- **WHEN** a photo or document has a self-destruct timer and no no-forward flag
+- **THEN** `download_media`, `get_thumbnail` and `view_thumbnail` return an error and create no file or image
 
 ### Requirement: Private and isolated local files
 

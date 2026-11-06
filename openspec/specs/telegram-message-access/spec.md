@@ -8,7 +8,7 @@ Read and discover the Telegram conversations available to the authenticated user
 
 ### Requirement: Resolve accessible chat identifiers
 
-Chat-scoped tools SHALL accept usernames with or without `@`, `t.me` username links with or without a scheme (including the `telegram.me` and `www.t.me` hosts), public message links, `t.me/s/name` links, private `t.me/c/channel/message` links, and marked numeric IDs represented as strings. Numeric lookup SHALL include main and archived dialogs and obtain the account's access information; resolved access information MAY be reused for the rest of the process lifetime. Successfully resolved usernames SHALL be reused for the rest of the process lifetime, matched case-insensitively, and a failed username lookup SHALL NOT be reused. Chats returned by `list_dialogs` and `list_folder_dialogs` SHALL be reusable by their marked IDs without another dialog scan. Positive IDs SHALL prefer a matching user and otherwise permit a matching channel fallback. Invite links SHALL fail without joining chats.
+Chat-scoped tools SHALL accept usernames with or without `@`, `t.me` username links with or without a scheme (including the `telegram.me` and `www.t.me` hosts), public message links, `t.me/s/name` links, private `t.me/c/channel/message` links, and marked numeric IDs represented as strings. Numeric lookup SHALL include main and archived dialogs and obtain the account's access information; resolved access information MAY be reused by marked ID for the rest of the process lifetime. Usernames SHALL be resolved through Telegram on every call, matched case-insensitively, and SHALL NOT be reused from earlier calls, because Telegram can reassign a username to a different chat. Chats returned by `list_dialogs` and `list_folder_dialogs` SHALL be reusable by their marked IDs without another dialog scan. Positive IDs SHALL prefer a matching user and otherwise permit a matching channel fallback. Invite links SHALL fail without joining chats.
 
 #### Scenario: Resolve an archived private channel after restart
 
@@ -33,7 +33,12 @@ Chat-scoped tools SHALL accept usernames with or without `@`, `t.me` username li
 #### Scenario: Repeated username lookup reuses access information
 
 - **WHEN** a caller names the same chat as `@Durov` and later as `t.me/durov`
-- **THEN** Telegram's username resolver is called only for the first of these calls
+- **THEN** Telegram's username resolver is called for each of these calls
+
+#### Scenario: Reassigned username targets its new owner
+
+- **WHEN** a username resolved to chat A earlier in the process now belongs to chat B, and a caller reads, marks read, or saves a draft using that username
+- **THEN** the call targets chat B, not chat A
 
 #### Scenario: Failed username lookup is retried later
 
@@ -382,3 +387,27 @@ An unread selection with no messages after the read cursor SHALL return explanat
 
 - **WHEN** a caller requests unread messages of a public channel the account has no dialog with
 - **THEN** the tool returns an error and no messages
+
+### Requirement: Hide Telegram service notification text
+
+Messages in the chat with Telegram's official service account (user ID `777000`), which delivers login codes, SHALL have their text replaced by a fixed placeholder in every message result: chat reads, search, global search, pinned messages, polling and `get_message`. Message ID, date, chat and media type SHALL still be reported.
+
+#### Scenario: Login code is not returned by a chat read
+
+- **WHEN** a caller reads messages from the chat with user `777000` and a message contains `Login code: 12345`
+- **THEN** the result shows the placeholder instead of the text and does not contain `12345`
+
+#### Scenario: Login code is not returned by global search
+
+- **WHEN** a caller runs `global_search` for `Login code` and a matching message comes from the chat with user `777000`
+- **THEN** that result shows the placeholder instead of the message text
+
+#### Scenario: Login code is not returned by direct lookup
+
+- **WHEN** a caller calls `get_message` for a message in the chat with user `777000`
+- **THEN** the result shows the placeholder instead of the message text and still includes the message ID and date
+
+#### Scenario: Other chats are unaffected
+
+- **WHEN** a caller reads a message containing `Login code: 12345` from any other chat
+- **THEN** the text is returned unchanged

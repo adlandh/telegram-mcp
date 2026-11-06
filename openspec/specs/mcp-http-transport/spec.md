@@ -37,12 +37,17 @@ The command `telegram-mcp http` SHALL serve MCP over the Streamable HTTP transpo
 
 ### Requirement: Bearer token authentication
 
-The `http` command SHALL require `TELEGRAM_MCP_HTTP_TOKEN`, at least 32 characters after trimming whitespace. Every HTTP request SHALL carry `Authorization: Bearer <token>`. The comparison SHALL run in constant time. Requests with a missing, malformed or wrong token SHALL receive `401 Unauthorized` before any MCP message is processed or Telegram is contacted. The token SHALL NOT appear in diagnostics.
+The `http` command SHALL require `TELEGRAM_MCP_HTTP_TOKEN`, at least 32 characters after trimming whitespace, and SHALL reject the placeholder value published in `.env.example`. Every HTTP request SHALL carry `Authorization: Bearer <token>`. The comparison SHALL run in constant time. Requests with a missing, malformed or wrong token SHALL receive `401 Unauthorized` before any MCP message is processed or Telegram is contacted. The token SHALL NOT appear in diagnostics.
 
 #### Scenario: Missing token configuration fails startup
 
 - **WHEN** `telegram-mcp http` runs and `TELEGRAM_MCP_HTTP_TOKEN` is unset or shorter than 32 characters
 - **THEN** the application reports a configuration error before loading the session and does not start serving
+
+#### Scenario: Published placeholder token fails startup
+
+- **WHEN** `telegram-mcp http` runs with `TELEGRAM_MCP_HTTP_TOKEN=replace_with_output_of_openssl_rand_hex_32`
+- **THEN** the application reports a configuration error telling the operator to generate a random token, and does not start serving
 
 #### Scenario: Unauthenticated request is rejected
 
@@ -101,3 +106,27 @@ In HTTP mode, the server SHALL write diagnostics, including the listening addres
 
 - **WHEN** the listener fails while a tool call is blocked in a Telegram operation
 - **THEN** the call receives cancellation and completes its cleanup before HTTP serving returns the listener error
+
+### Requirement: Bounded HTTP connection lifetime
+
+The HTTP listener SHALL close a connection whose request body is not fully received within a fixed deadline, whether or not the request is authenticated, and SHALL close keep-alive connections that stay idle between requests beyond a fixed timeout. Request bodies larger than 1 MiB SHALL be rejected with `413` before authentication. These limits SHALL NOT end response streams or tool calls that run longer than the deadlines once the request body has been received.
+
+#### Scenario: Stalled request body is dropped
+
+- **WHEN** a client sends complete headers to `/mcp` with a `Content-Length` larger than the bytes it sends, then stops sending
+- **THEN** the server closes the connection after the body deadline, whether or not the request carried a valid token
+
+#### Scenario: Oversized request body is rejected
+
+- **WHEN** a client sends a request body larger than 1 MiB to `/mcp`
+- **THEN** the server responds `413` and no tool executes
+
+#### Scenario: Idle keep-alive connection is closed
+
+- **WHEN** a client completes a request and leaves the keep-alive connection idle past the idle timeout
+- **THEN** the server closes the connection
+
+#### Scenario: Long tool call is not cut off
+
+- **WHEN** an authenticated tool call runs longer than the body deadline after its request body was received
+- **THEN** the call completes and its response is delivered
