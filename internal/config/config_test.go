@@ -67,6 +67,8 @@ func TestCheckHTTP(t *testing.T) {
 		{"127.0.0.1:8080", token, ""},
 		{"[::1]:8080", token, ""},
 		{"localhost:8080", token, ""},
+		{"127.0.0.1:8080", "replace_with_output_of_openssl_rand_hex_32", "public example"},
+		{"127.0.0.1:8080", strings.Repeat("0f", 32), ""},
 	} {
 		err := Config{HTTPAddr: tt.addr, HTTPToken: tt.token}.CheckHTTP()
 		if tt.want == "" && err != nil || tt.want != "" && (err == nil || !strings.Contains(err.Error(), tt.want)) {

@@ -629,30 +629,46 @@ func TestSearchRPCs(t *testing.T) {
 	}
 }
 
-func TestUsernameResolutionIsCached(t *testing.T) {
-	calls, fail := 0, false
+func TestUsernameIsResolvedEveryCall(t *testing.T) {
+	calls, owner, fail := 0, int64(1), false
+	var drafts []int64
 	c := &Client{api: tg.NewClient(invokeFunc(func(_ context.Context, in bin.Encoder, out bin.Decoder) error {
-		req, ok := in.(*tg.ContactsResolveUsernameRequest)
-		if !ok {
+		switch req := in.(type) {
+		case *tg.ContactsResolveUsernameRequest:
+			calls++
+			if fail {
+				return errors.New("USERNAME_NOT_OCCUPIED")
+			}
+			if !strings.EqualFold(req.Username, "durov") {
+				t.Errorf("username %q", req.Username)
+			}
+			*out.(*tg.ContactsResolvedPeer) = tg.ContactsResolvedPeer{Peer: &tg.PeerChannel{ChannelID: owner}, Chats: []tg.ChatClass{&tg.Channel{ID: owner, AccessHash: owner * 10, Title: "Durov"}}}
+		case *tg.MessagesSaveDraftRequest:
+			drafts = append(drafts, req.Peer.(*tg.InputPeerChannel).ChannelID)
+			out.(*tg.BoolBox).Bool = &tg.BoolTrue{}
+		default:
 			return fmt.Errorf("unexpected request %T", in)
 		}
-		calls++
-		if fail {
-			return errors.New("USERNAME_NOT_OCCUPIED")
-		}
-		if req.Username != "Durov" {
-			t.Errorf("username %q", req.Username)
-		}
-		*out.(*tg.ContactsResolvedPeer) = tg.ContactsResolvedPeer{Peer: &tg.PeerChannel{ChannelID: 1}, Chats: []tg.ChatClass{&tg.Channel{ID: 1, AccessHash: 2, Title: "Durov"}}}
 		return nil
 	}))}
 	for _, name := range []string{"@Durov", "t.me/durov", "-1000000000001"} {
-		if r, err := c.resolve(t.Context(), name); err != nil || r.input.(*tg.InputPeerChannel).AccessHash != 2 {
+		if r, err := c.resolve(t.Context(), name); err != nil || r.input.(*tg.InputPeerChannel).AccessHash != 10 {
 			t.Fatalf("%s: %+v, %v", name, r, err)
 		}
 	}
-	if calls != 1 {
-		t.Fatalf("username resolved %d times, want 1", calls)
+	// The marked ID came from the cache; both username forms asked Telegram.
+	if calls != 2 {
+		t.Fatalf("username resolved %d times, want 2", calls)
+	}
+	// The username changes hands; the next write must follow it.
+	for _, o := range []int64{1, 2} {
+		owner = o
+		if _, err := c.SaveDraft(t.Context(), "@durov", "hi"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !slices.Equal(drafts, []int64{1, 2}) {
+		t.Fatalf("drafts went to %v, want [1 2]", drafts)
 	}
 	fail, calls = true, 0
 	for range 2 {
@@ -793,5 +809,133 @@ func TestSelf(t *testing.T) {
 	cancel()
 	if _, err := c.Self(ctx); err == nil {
 		t.Fatal("cancelled request succeeded")
+	}
+}
+
+func TestServiceNotificationTextIsHidden(t *testing.T) {
+	const code = "Login code: 12345"
+	service := &tg.PeerUser{UserID: 777000}
+	users := []tg.UserClass{&tg.User{ID: 777000, AccessHash: 1, FirstName: "Telegram"}, &tg.User{ID: 5, AccessHash: 6, FirstName: "Ann"}}
+	msgs := func(p tg.PeerClass) tg.MessagesMessagesClass {
+		return &tg.MessagesMessages{Messages: []tg.MessageClass{&tg.Message{ID: 9, Date: 100, PeerID: p, Message: code}}, Users: users}
+	}
+	c := &Client{api: tg.NewClient(invokeFunc(func(_ context.Context, in bin.Encoder, out bin.Decoder) error {
+		switch req := in.(type) {
+		case *tg.ContactsResolveUsernameRequest:
+			id := int64(777000)
+			if req.Username == "ann" {
+				id = 5
+			}
+			*out.(*tg.ContactsResolvedPeer) = tg.ContactsResolvedPeer{Peer: &tg.PeerUser{UserID: id}, Users: users}
+		case *tg.MessagesGetHistoryRequest:
+			p := tg.PeerClass(service)
+			if u, ok := req.Peer.(*tg.InputPeerUser); ok && u.UserID == 5 {
+				p = &tg.PeerUser{UserID: 5}
+			}
+			out.(*tg.MessagesMessagesBox).Messages = msgs(p)
+		case *tg.MessagesSearchGlobalRequest, *tg.MessagesGetMessagesRequest:
+			out.(*tg.MessagesMessagesBox).Messages = msgs(service)
+		default:
+			return fmt.Errorf("unexpected request %T", in)
+		}
+		return nil
+	}))}
+	var got []domain.Message
+	for _, q := range []domain.MessageQuery{{Chat: "telegram", Limit: 1}, {Search: "Login code", Global: true, Limit: 1}} {
+		m, err := c.Messages(t.Context(), q)
+		if err != nil || len(m) != 1 {
+			t.Fatalf("%+v: %+v, %v", q, m, err)
+		}
+		got = append(got, m[0])
+	}
+	m, err := c.Message(t.Context(), "telegram", 9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range append(got, m) {
+		if strings.Contains(m.Text, "12345") || m.ID != 9 || m.Date.Unix() != 100 {
+			t.Fatalf("service notification leaked: %+v", m)
+		}
+	}
+	if m, err := c.Messages(t.Context(), domain.MessageQuery{Chat: "ann", Limit: 1}); err != nil || len(m) != 1 || m[0].Text != code {
+		t.Fatalf("other chat: %+v, %v", m, err)
+	}
+}
+
+// privateMediaClient serves message 3 from the private chat with user 7, carrying media.
+// full is the user's full info; nil makes users.getFullUser fail.
+func privateMediaClient(t *testing.T, dir string, media tg.MessageMediaClass, full *tg.UserFull) (*Client, *int) {
+	fetched := 0
+	return &Client{downloadDir: dir, api: tg.NewClient(invokeFunc(func(_ context.Context, in bin.Encoder, out bin.Decoder) error {
+		switch in.(type) {
+		case *tg.ContactsResolveUsernameRequest:
+			*out.(*tg.ContactsResolvedPeer) = tg.ContactsResolvedPeer{Peer: &tg.PeerUser{UserID: 7}, Users: []tg.UserClass{&tg.User{ID: 7, AccessHash: 8}}}
+		case *tg.MessagesGetMessagesRequest:
+			out.(*tg.MessagesMessagesBox).Messages = &tg.MessagesMessages{
+				Messages: []tg.MessageClass{&tg.Message{ID: 3, PeerID: &tg.PeerUser{UserID: 7}, Media: media}},
+				Users:    []tg.UserClass{&tg.User{ID: 7, AccessHash: 8}},
+			}
+		case *tg.UsersGetFullUserRequest:
+			if full == nil {
+				return errors.New("FLOOD_WAIT_X")
+			}
+			out.(*tg.UsersUserFull).FullUser = *full
+		case *tg.UploadGetFileRequest:
+			fetched++
+			out.(*tg.UploadFileBox).File = &tg.UploadFile{Type: &tg.StorageFilePdf{}}
+		default:
+			t.Fatalf("unexpected %T", in)
+		}
+		return nil
+	}))}, &fetched
+}
+
+// assertNoExport checks that a full download, a thumbnail and an inline preview all fail without fetching or saving.
+func assertNoExport(t *testing.T, newClient func(dir string) (*Client, *int)) {
+	t.Helper()
+	dir := t.TempDir()
+	c, fetched := newClient(dir)
+	for _, preview := range []bool{false, true} {
+		if f, err := c.Download(t.Context(), "user", 3, preview, 0); err == nil {
+			t.Fatalf("download preview=%v: %+v", preview, f)
+		}
+	}
+	if img, err := c.Preview(t.Context(), "user", 3, 0); err == nil || img.Data != nil {
+		t.Fatalf("preview: %q, %v", img.MIME, err)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 || *fetched != 0 {
+		t.Fatalf("files %v, fetched %d", entries, *fetched)
+	}
+}
+
+func TestPrivateChatProtection(t *testing.T) {
+	media := &tg.MessageMediaDocument{Document: pdfDoc(5, &tg.PhotoSize{Type: "m", W: 90, H: 90, Size: 5})}
+	for name, full := range map[string]*tg.UserFull{
+		"mine":    {NoforwardsMyEnabled: true},
+		"peer":    {NoforwardsPeerEnabled: true},
+		"unknown": nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			assertNoExport(t, func(dir string) (*Client, *int) { return privateMediaClient(t, dir, media, full) })
+		})
+	}
+	c, _ := privateMediaClient(t, t.TempDir(), &tg.MessageMediaDocument{Document: pdfDoc(0)}, &tg.UserFull{})
+	if _, err := c.Download(t.Context(), "user", 3, false, 0); err != nil {
+		t.Fatalf("unprotected private chat: %v", err)
+	}
+}
+
+func TestSelfDestructingMediaIsNotExported(t *testing.T) {
+	thumb := &tg.PhotoSize{Type: "m", W: 90, H: 90, Size: 5}
+	for name, media := range map[string]tg.MessageMediaClass{
+		"photo":    &tg.MessageMediaPhoto{TTLSeconds: 10, Photo: &tg.Photo{Sizes: []tg.PhotoSizeClass{thumb}}},
+		"document": &tg.MessageMediaDocument{TTLSeconds: 10, Document: pdfDoc(5, thumb)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if mediaInfo(&tg.Message{Media: media}).Downloadable {
+				t.Fatal("self-destructing media reported as downloadable")
+			}
+			assertNoExport(t, func(dir string) (*Client, *int) { return privateMediaClient(t, dir, media, &tg.UserFull{}) })
+		})
 	}
 }

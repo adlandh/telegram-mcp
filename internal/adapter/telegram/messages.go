@@ -229,6 +229,9 @@ func messageEntities(m tg.ModifiedMessagesMessages) peer.Entities {
 	return peer.NewEntities(tg.UserClassArray(m.GetUsers()).UserToMap(), chats.ChatToMap(), chats.ChannelToMap())
 }
 
+// serviceNotificationsID is the marked ID of Telegram's official service account.
+const serviceNotificationsID = "777000"
+
 func convertMessage(raw tg.NotEmptyMessage, entities peer.Entities) domain.Message {
 	m, ok := raw.(*tg.Message)
 	if !ok {
@@ -244,6 +247,11 @@ func convertMessage(raw tg.NotEmptyMessage, entities peer.Entities) domain.Messa
 
 	r := domain.Message{ID: m.ID, Date: time.Unix(int64(m.Date), 0), Text: m.Message,
 		Sender: cmp.Or(sender.Username, sender.Title, m.PostAuthor), Chat: chat.Title, ChatID: chat.ID, Media: mediaInfo(m)}
+	// Telegram delivers login codes in this chat; a client able to read them could sign in as the account.
+	if chat.ID == serviceNotificationsID {
+		r.Text = "[hidden: Telegram service notification]"
+	}
+
 	if m.GroupedID != 0 {
 		r.AlbumID = strconv.FormatInt(m.GroupedID, 10)
 	}

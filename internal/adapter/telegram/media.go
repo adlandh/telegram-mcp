@@ -14,6 +14,7 @@ import (
 
 	"github.com/adlandh/telegram-mcp/internal/domain"
 	"github.com/gotd/td/telegram/downloader"
+	"github.com/gotd/td/telegram/message/peer"
 	"github.com/gotd/td/telegram/thumbnail"
 	"github.com/gotd/td/tg"
 )
@@ -30,7 +31,7 @@ func mediaInfo(m *tg.Message) domain.Media {
 		info.Type = "none"
 	case *tg.MessageMediaPhoto:
 		if photo, ok := media.Photo.(*tg.Photo); ok {
-			info.Type, info.MIME, info.Downloadable = "photo", "image/jpeg", true
+			info.Type, info.MIME, info.Downloadable = "photo", "image/jpeg", !selfDestructs(media)
 			for _, size := range photo.Sizes {
 				info.SizeBytes = max(info.SizeBytes, photoBytes(size))
 			}
@@ -38,6 +39,7 @@ func mediaInfo(m *tg.Message) domain.Media {
 	case *tg.MessageMediaDocument:
 		if doc, ok := media.Document.(*tg.Document); ok {
 			info = documentInfo(doc)
+			info.Downloadable = !selfDestructs(media)
 		}
 	}
 
@@ -304,14 +306,9 @@ func (c *Client) media(ctx context.Context, chat string, id int, preview bool, m
 	if !ok {
 		return "", 0, nil, fmt.Errorf("message has no downloadable media")
 	}
-	// Fresh response entities supersede cached protection in both directions.
-	protected := r.protected
-	if fresh := describe(m.PeerID, entities); fresh.known {
-		protected = fresh.protected
-	}
 
-	if m.Noforwards || protected {
-		return "", 0, nil, fmt.Errorf("this chat restricts saving content (no-forward)")
+	if err = c.checkExportable(ctx, m, entities, r); err != nil {
+		return "", 0, nil, err
 	}
 
 	file, err := fileFor(m, preview)
@@ -324,6 +321,59 @@ func (c *Client) media(ctx context.Context, chat string, id int, preview bool, m
 	}
 
 	return fmt.Sprintf("%s_%d_%s", r.info.ID, id, file.name), file.exact, c.stream(ctx, file), nil
+}
+
+// checkExportable refuses protected and self-destructing media.
+func (c *Client) checkExportable(ctx context.Context, m *tg.Message, entities peer.Entities, r resolved) error {
+	if selfDestructs(m.Media) {
+		return fmt.Errorf("self-destructing media can't be saved")
+	}
+	// Fresh response entities supersede cached protection in both directions.
+	protected := r.protected
+	if fresh := describe(m.PeerID, entities); fresh.known {
+		protected = fresh.protected
+	}
+
+	if !m.Noforwards && !protected {
+		var err error
+		if protected, err = c.privateChatProtected(ctx, r.input); err != nil {
+			return err
+		}
+	}
+
+	if m.Noforwards || protected {
+		return fmt.Errorf("this chat restricts saving content (no-forward)")
+	}
+
+	return nil
+}
+
+// selfDestructs reports whether media carries a self-destruct timer.
+func selfDestructs(media tg.MessageMediaClass) bool {
+	switch media := media.(type) {
+	case *tg.MessageMediaPhoto:
+		return media.TTLSeconds > 0
+	case *tg.MessageMediaDocument:
+		return media.TTLSeconds > 0
+	}
+
+	return false
+}
+
+// privateChatProtected reports whether either side of a private chat enabled content protection.
+// Basic user entities lack this flag, so it is read from full user info; errors fail closed.
+func (c *Client) privateChatProtected(ctx context.Context, input tg.InputPeerClass) (bool, error) {
+	u, ok := input.(*tg.InputPeerUser)
+	if !ok {
+		return false, nil
+	}
+
+	full, err := c.api.UsersGetFullUser(ctx, &tg.InputUser{UserID: u.UserID, AccessHash: u.AccessHash})
+	if err != nil {
+		return false, fmt.Errorf("check chat content protection: %w", err)
+	}
+
+	return full.FullUser.NoforwardsMyEnabled || full.FullUser.NoforwardsPeerEnabled, nil
 }
 
 // stream returns a function writing file's payload: inline data as is, anything else from Telegram.

@@ -1,10 +1,12 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
+	"io"
 	"net/http"
 	"sync"
 	"time"
@@ -63,7 +65,7 @@ func HTTPHandler(ctx context.Context, server *mcp.Server, token string) (http.Ha
 	mux.Handle("/mcp", http.NewCrossOriginProtection().Handler(
 		auth.RequireBearerToken(verify, &auth.RequireBearerTokenOptions{AllowMissingExpiration: true})(streamable)))
 
-	return mux, func() {
+	return boundedBody(mux), func() {
 		mu.Lock()
 		closed = true
 		mu.Unlock()
@@ -72,3 +74,36 @@ func HTTPHandler(ctx context.Context, server *mcp.Server, token string) (http.Ha
 }
 
 var errShuttingDown = errors.New("server is shutting down")
+
+// bodyTimeout bounds how long a client may take to send a request body; tests shorten it.
+var bodyTimeout = 30 * time.Second
+
+const maxBodyBytes = 1 << 20
+
+// boundedBody reads each request body within bodyTimeout and maxBodyBytes before
+// authentication. Otherwise a client could stall a connection indefinitely: the 401
+// path never reads the body, and net/http drains it afterwards without a deadline.
+// The deadline is cleared before next runs, so long tool calls and streams are unaffected.
+func boundedBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rc := http.NewResponseController(w)
+		_ = rc.SetReadDeadline(time.Now().Add(bodyTimeout))
+
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+		if err != nil {
+			status := http.StatusRequestTimeout
+			if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
+				status = http.StatusRequestEntityTooLarge
+			}
+
+			w.Header().Set("Connection", "close")
+			http.Error(w, http.StatusText(status), status)
+
+			return
+		}
+
+		_ = rc.SetReadDeadline(time.Time{})
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		next.ServeHTTP(w, r)
+	})
+}
