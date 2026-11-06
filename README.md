@@ -86,17 +86,16 @@ Replace example paths, credentials, domain, and token; never commit them.
 Local:
 
 ```sh
-claude mcp add telegram -s user \
-  -e TELEGRAM_API_ID=123456 -e TELEGRAM_API_HASH=your_32_character_api_hash \
-  -- /absolute/path/to/telegram-mcp/bin/telegram-mcp
+claude mcp add-json telegram -s user '{"type":"stdio","command":"/absolute/path/to/telegram-mcp/bin/telegram-mcp","env":{"TELEGRAM_API_ID":"123456","TELEGRAM_API_HASH":"${TELEGRAM_API_HASH}"}}'
 ```
 
 Remote:
 
 ```sh
-claude mcp add telegram -s user --transport http https://tg.example.com/mcp \
-  --header "Authorization: Bearer $TELEGRAM_MCP_HTTP_TOKEN"
+claude mcp add-json telegram -s user '{"type":"http","url":"https://tg.example.com/mcp","headers":{"Authorization":"Bearer ${TELEGRAM_MCP_HTTP_TOKEN}"}}'
 ```
+
+The single quotes keep secrets out of command-line arguments: Claude Code stores the `${...}` reference and expands it from its own environment when it connects, so export `TELEGRAM_API_HASH` or `TELEGRAM_MCP_HTTP_TOKEN` where Claude Code runs.
 
 Check the connection with `/mcp`.
 
@@ -198,7 +197,7 @@ Keep `header_up Host`; without it the server rejects the public `Host` header wi
 
 ## Tools
 
-`groupUrl` accepts `@username`, `https://t.me/...` links (including message links), or a numeric chat ID as a string from `list_dialogs`.
+`groupUrl` accepts `@username`, `https://t.me/...` links (including message links), or a numeric chat ID as a string from `list_dialogs`. Usernames are looked up on every call, because Telegram can reassign them; prefer numeric IDs for frequent polling.
 
 | Tool | Required parameters | Optional parameters |
 | --- | --- | --- |
@@ -221,6 +220,8 @@ Keep `header_up Host`; without it the server rejects the public `Host` header wi
 | `save_draft` | `groupUrl`, `text` | — |
 
 **Side effects are explicit:** only `mark_read` (advances the read cursor) and `save_draft` (replaces a chat's draft) change account state. `download_media` and `get_thumbnail` write local files; `view_thumbnail` writes none. Nothing sends, edits, or deletes messages or joins chats.
+
+**Protected content stays put:** media from no-forward chats or messages, from private chats where either side enabled content protection, and self-destructing media is never downloaded or previewed. Message text from Telegram's service account (`777000`), where login codes arrive, is hidden.
 
 ## License
 
