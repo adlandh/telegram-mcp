@@ -20,8 +20,8 @@ import (
 type Client struct {
 	api         *tg.Client
 	downloadDir string
-	// peers maps marked IDs and lowercased usernames to resolved peers.
-	// ponytail: never invalidated, so a username reassigned mid-run stays stale until restart.
+	// peers maps marked IDs to resolved peers. Usernames are never keys:
+	// Telegram can reassign them, so they are resolved on every call.
 	peers sync.Map // string -> resolved
 }
 
@@ -116,13 +116,12 @@ func (c *Client) resolve(ctx context.Context, raw string) (resolved, error) {
 	if err != nil {
 		return resolved{}, err
 	}
-	// Telegram usernames are case-insensitive and never purely numeric.
-	key := strings.ToLower(name)
-	if r, ok := c.cached(key); ok {
-		return r, nil
-	}
-
+	// Telegram usernames are never purely numeric, so only marked IDs hit the cache.
 	if id, parseErr := strconv.ParseInt(name, 10, 64); parseErr == nil {
+		if r, ok := c.cached(name); ok {
+			return r, nil
+		}
+
 		return c.resolveID(ctx, name, id)
 	}
 
@@ -138,7 +137,7 @@ func (c *Client) resolve(ctx context.Context, raw string) (resolved, error) {
 		return info, fmt.Errorf("resolve username peer: %w", err)
 	}
 
-	c.remember(info, key)
+	c.remember(info)
 
 	return info, nil
 }
