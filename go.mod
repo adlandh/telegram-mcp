@@ -3,7 +3,7 @@ module github.com/adlandh/telegram-mcp
 go 1.26.0
 
 require (
-	github.com/gotd/td v0.164.1
+	github.com/gotd/td v0.166.1
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	go.uber.org/fx v1.24.0
